@@ -1,6 +1,6 @@
 {
   "name": "Hifz Master",
-  "description": "A world-class Quran memorization companion. Select verses, play them in a continuous loop, and get AI-powered insights and memorization tips using Gemini.",
+  "description": "A world-class Quran memorization companion. Select a range of verses by dragging across them and play the block in a continuous loop, with per-verse repeats, an adjustable pause and playback speed.",
   "requestFramePermissions": [
     "microphone"
   ]

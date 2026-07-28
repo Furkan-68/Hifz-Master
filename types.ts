@@ -26,6 +26,11 @@ export interface SurahDetail extends Surah {
   ayahs: Ayah[];
 }
 
+export interface AyahRange {
+  start: number; // 0-based index into SurahDetail.ayahs, inclusive
+  end: number;   // 0-based index into SurahDetail.ayahs, inclusive, always >= start
+}
+
 export interface Reciter {
   identifier: string;
   language: string;

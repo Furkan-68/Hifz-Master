@@ -15,6 +15,18 @@ export const fetchSurahDetail = async (surahNumber: number, reciterIdentifier: s
   return data.data;
 };
 
+export const fetchTranslation = async (surahNumber: number, edition: string): Promise<string[]> => {
+  const response = await fetch(`${BASE_URL}/surah/${surahNumber}/${edition}`);
+  const payload = await response.json();
+  const data = payload?.data;
+  // An unknown identifier does not error out - the API answers 200 and quietly falls back
+  // to quran-simple, which would put Arabic in the translation slot. Check what came back.
+  if (!Array.isArray(data?.ayahs) || data.edition?.identifier !== edition) {
+    throw new Error(`Translation "${edition}" is unavailable`);
+  }
+  return data.ayahs.map((ayah: { text: string }) => ayah.text);
+};
+
 export const fetchReciters = async (): Promise<Reciter[]> => {
   const response = await fetch(`${BASE_URL}/edition?format=audio&language=ar&type=versebyverse`);
   const data = await response.json();
