@@ -21,7 +21,8 @@ import {
   CheckCircle2,
   Monitor,
   Sun,
-  Moon
+  Moon,
+  SlidersHorizontal
 } from 'lucide-react';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -119,7 +120,7 @@ const readStoredSelection = (surahNumber: number, ayahCount: number): AyahRange 
 };
 
 interface StepperProps {
-  label: string;
+  label?: string; // omitted where a surrounding row already names the control
   value: string;
   title: string;
   canDecrease: boolean;
@@ -145,7 +146,7 @@ const Stepper: React.FC<StepperProps> = ({ label, value, title, canDecrease, can
     >
       <Plus className="w-3 h-3" />
     </button>
-    <span className="text-[10px] tracking-wider text-slate-400 pr-2 hidden sm:inline">{label}</span>
+    {label && <span className="text-[10px] tracking-wider text-slate-400 pr-2 hidden sm:inline">{label}</span>}
   </div>
 );
 
@@ -175,6 +176,7 @@ const App: React.FC = () => {
   });
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showPlayback, setShowPlayback] = useState<boolean>(false);
   const [theme, setTheme] = useState<Theme>(
     () => (localStorage.getItem('hifz_theme') as Theme) || 'system'
   );
@@ -506,14 +508,16 @@ const App: React.FC = () => {
     };
   }, [currentAyahIndex, currentSurah, reciter, selection]);
 
-  // Escape clears the range
+  // Escape closes whatever is open on top, and only then clears the range
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !showSettings) clearSelection();
+      if (e.key !== 'Escape' || showSettings) return;
+      if (showPlayback) setShowPlayback(false);
+      else clearSelection();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, showSettings]);
+  }, [clearSelection, showSettings, showPlayback]);
 
   // Never leave a pause timer running behind us
   useEffect(() => () => {
@@ -939,9 +943,95 @@ const App: React.FC = () => {
           )}
         </div>
 
+        {/* Catches the click that closes the playback panel. Sits below the player (z-50) so
+            the panel's own controls stay reachable. */}
+        {showPlayback && (
+          <div className="fixed inset-0 z-40" onClick={() => setShowPlayback(false)} />
+        )}
+
         {/* Floating Player Controls */}
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-transparent pointer-events-none z-50">
-          <div className="max-w-3xl mx-auto pointer-events-auto">
+          <div className="relative max-w-3xl mx-auto pointer-events-auto">
+            {/* Playback panel - floats above the bar so the verses stay visible while you
+                adjust something mid-recitation. */}
+            {showPlayback && (
+              <div className="absolute bottom-full right-0 mb-3 w-[min(22rem,calc(100vw-2rem))] bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50">
+                  <h2 className="text-sm font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    Playback
+                  </h2>
+                  <button
+                    onClick={() => setShowPlayback(false)}
+                    className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"
+                  >
+                    <X className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                  </button>
+                </div>
+
+                <div className="p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Speed</div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Pitch stays intact</p>
+                    </div>
+                    <Stepper
+                      title="How fast the recitation is played back"
+                      value={`${playbackRate}×`}
+                      canDecrease={playbackRate > MIN_PLAYBACK_RATE}
+                      canIncrease={playbackRate < MAX_PLAYBACK_RATE}
+                      onDecrease={() => setPlaybackRate(v => Math.max(MIN_PLAYBACK_RATE, Math.round((v - PLAYBACK_RATE_STEP) * 100) / 100))}
+                      onIncrease={() => setPlaybackRate(v => Math.min(MAX_PLAYBACK_RATE, Math.round((v + PLAYBACK_RATE_STEP) * 100) / 100))}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Repeats per verse</div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Before moving on</p>
+                    </div>
+                    <Stepper
+                      title="How often each verse repeats before moving on"
+                      value={`${verseRepeat}×`}
+                      canDecrease={verseRepeat > 1}
+                      canIncrease={verseRepeat < MAX_VERSE_REPEAT}
+                      onDecrease={() => setVerseRepeat(v => Math.max(1, v - 1))}
+                      onIncrease={() => setVerseRepeat(v => Math.min(MAX_VERSE_REPEAT, v + 1))}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Pause</div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {/* The factor multiplies the measured pass, so the concrete number only
+                            exists once a full pass has been heard. */}
+                        {passSeconds > 0
+                          ? pauseFactor > 0
+                            ? `≈ ${Math.round(passSeconds * pauseFactor)}s before the block starts over`
+                            : 'No pause before the block starts over'
+                          : 'A multiple of how long one pass takes'}
+                      </p>
+                    </div>
+                    <Stepper
+                      title={`Silence before the block starts over, as a multiple of how long one pass takes${
+                        passSeconds > 0 ? ` (one pass ≈ ${Math.round(passSeconds)}s)` : ''
+                      }`}
+                      value={`${pauseFactor}×`}
+                      canDecrease={pauseFactor > 0}
+                      canIncrease={pauseFactor < MAX_PAUSE_FACTOR}
+                      onDecrease={() => setPauseFactor(v => Math.round((v - PAUSE_FACTOR_STEP) * 100) / 100)}
+                      onIncrease={() => setPauseFactor(v => Math.round((v + PAUSE_FACTOR_STEP) * 100) / 100)}
+                    />
+                  </div>
+
+                  <p className="pt-1 text-xs text-slate-400 border-t border-slate-100 dark:border-slate-800">
+                    Pause is saved for {reciterName} — reciters differ in tempo.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-2xl rounded-2xl p-4 md:p-6 flex flex-col gap-4">
               {/* Practice bar - always visible; without a drag selection it targets the
                   current verse. */}
@@ -959,47 +1049,16 @@ const App: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <Stepper
-                      label="SPEED"
-                      title="How fast the recitation is played back (pitch stays intact)"
-                      value={`${playbackRate}×`}
-                      canDecrease={playbackRate > MIN_PLAYBACK_RATE}
-                      canIncrease={playbackRate < MAX_PLAYBACK_RATE}
-                      onDecrease={() => setPlaybackRate(v => Math.max(MIN_PLAYBACK_RATE, Math.round((v - PLAYBACK_RATE_STEP) * 100) / 100))}
-                      onIncrease={() => setPlaybackRate(v => Math.min(MAX_PLAYBACK_RATE, Math.round((v + PLAYBACK_RATE_STEP) * 100) / 100))}
-                    />
-                    <Stepper
-                      label="PER VERSE"
-                      title="How often each verse repeats before moving on"
-                      value={`${verseRepeat}×`}
-                      canDecrease={verseRepeat > 1}
-                      canIncrease={verseRepeat < MAX_VERSE_REPEAT}
-                      onDecrease={() => setVerseRepeat(v => Math.max(1, v - 1))}
-                      onIncrease={() => setVerseRepeat(v => Math.min(MAX_VERSE_REPEAT, v + 1))}
-                    />
-                    <Stepper
-                      label={passSeconds > 0 && pauseFactor > 0 ? `≈ ${Math.round(passSeconds * pauseFactor)}s` : 'PAUSE'}
-                      title={`Silence before the block starts over, as a multiple of how long one pass takes${
-                        passSeconds > 0 ? ` (one pass ≈ ${Math.round(passSeconds)}s)` : ''
-                      }. Saved for ${reciterName}.`}
-                      value={`${pauseFactor}×`}
-                      canDecrease={pauseFactor > 0}
-                      canIncrease={pauseFactor < MAX_PAUSE_FACTOR}
-                      onDecrease={() => setPauseFactor(v => Math.round((v - PAUSE_FACTOR_STEP) * 100) / 100)}
-                      onIncrease={() => setPauseFactor(v => Math.round((v + PAUSE_FACTOR_STEP) * 100) / 100)}
-                    />
-                    {/* Only a real drag selection can be cleared. */}
-                    {selection && (
-                      <button
-                        onClick={clearSelection}
-                        title="Clear selection"
-                        className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
+                  {/* Only a real drag selection can be cleared. */}
+                  {selection && (
+                    <button
+                      onClick={clearSelection}
+                      title="Clear selection"
+                      className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1023,6 +1082,19 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2 md:gap-4">
+                  <button
+                    onClick={() => setShowPlayback(v => !v)}
+                    aria-expanded={showPlayback}
+                    title="Speed, repeats and pause"
+                    className={`p-2.5 rounded-full transition-colors ${
+                      showPlayback
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <SlidersHorizontal className="w-5 h-5" />
+                  </button>
+
                   <button
                     onClick={() => handleActivateAyah(Math.max(0, currentAyahIndex - 1))}
                     disabled={currentAyahIndex === 0}

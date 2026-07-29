@@ -28,6 +28,10 @@ selected, the current verse is the block — so the controls always do something
 **Repeat each verse.** 1–10× before moving on. Repeats run back to back; the pause sits only
 at the end of a full pass.
 
+All three dials — speed, repeats and pause — live behind the slider button next to the play
+controls. It opens a small panel above the bar, so the verses stay readable while you adjust
+something mid-recitation.
+
 **Pause proportional to the material.** Instead of a fixed number of seconds, the silence is a
 multiple (0–3×) of how long one pass through the block actually took — measured while it
 plays, so it accounts for the playback speed. A one-verse block gets a pause the length of that
@@ -41,9 +45,9 @@ one of five editions — Talal Itani's *Clear Qur'an*, Saheeh International, Pic
 or Muhammad Asad. The translation appears under each verse. All five ship with the app; the one
 you pick is read from disk once and then kept in memory.
 
-**Track what you have learned.** Mark a single verse with the check button on its card, the
-whole current block from the practice bar, or an entire surah from the sidebar. Each surah row
-shows `learned/total` and a hairline progress bar; the sidebar header shows the overall count.
+**Track what you have learned.** Mark a single verse with the check button on its card, or an
+entire surah from the sidebar. Each surah row shows `learned/total` and a hairline progress bar;
+the sidebar header shows the overall count.
 
 Everything — selection, settings and progress — is kept in the browser's `localStorage`.
 
