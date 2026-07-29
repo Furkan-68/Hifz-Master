@@ -83,22 +83,32 @@ const readLearned = (): LearnedMap => {
 const clampFactor = (value: number): number =>
   Number.isFinite(value) ? Math.min(MAX_PAUSE_FACTOR, Math.max(0, value)) : 0;
 
-// Reciters differ in tempo, so the factor that leaves you enough time to recite along is
-// a per-reciter preference rather than a global one.
-const readPauseFactors = (): PauseFactors => {
+// Reciters differ in tempo, so a factor that leaves you enough time to recite along is
+// a per-reciter preference rather than a global one. Both pauses are stored that way.
+const readFactorMap = (key: string): PauseFactors => {
   try {
-    const raw = localStorage.getItem('hifz_pause_factors');
+    const raw = localStorage.getItem(key);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') return parsed as PauseFactors;
     }
+  } catch {
+    /* fall through to an empty map */
+  }
+  return {};
+};
+
+const readPauseFactors = (): PauseFactors => {
+  const stored = readFactorMap('hifz_pause_factors');
+  if (Object.keys(stored).length > 0) return stored;
+  try {
     // Carry over the value from when one factor was shared by all reciters.
     const legacy = clampFactor(Number(localStorage.getItem('hifz_pause_factor')));
     if (legacy > 0) {
       return { [localStorage.getItem('hifz_reciter') || 'ar.alafasy']: legacy };
     }
   } catch {
-    /* fall through to an empty map */
+    /* no legacy value to carry over */
   }
   return {};
 };
@@ -163,12 +173,16 @@ const App: React.FC = () => {
     return saved >= 1 && saved <= MAX_VERSE_REPEAT ? saved : 1;
   });
   const [pauseFactors, setPauseFactors] = useState<PauseFactors>(readPauseFactors);
+  const [versePauseFactors, setVersePauseFactors] = useState<PauseFactors>(
+    () => readFactorMap('hifz_verse_pause_factors')
+  );
   const [playbackRate, setPlaybackRate] = useState<number>(() => {
     const saved = Number(localStorage.getItem('hifz_playback_rate'));
     return saved >= MIN_PLAYBACK_RATE && saved <= MAX_PLAYBACK_RATE ? saved : 1;
   });
   // Length of one pass through the selection, measured while it plays.
   const [passSeconds, setPassSeconds] = useState<number>(0);
+  const [verseSeconds, setVerseSeconds] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [reciter, setReciter] = useState<string>(() => {
@@ -193,11 +207,18 @@ const App: React.FC = () => {
   const [translationFailed, setTranslationFailed] = useState<boolean>(false);
   const [learned, setLearned] = useState<LearnedMap>(readLearned);
 
-  // The pause factor belongs to the reciter you are listening to.
+  // Both pause factors belong to the reciter you are listening to.
   const pauseFactor = clampFactor(pauseFactors[reciter] ?? 0);
+  const versePauseFactor = clampFactor(versePauseFactors[reciter] ?? 0);
   // Functional update, so rapid clicks batched into one render still all count.
   const setPauseFactor = useCallback((update: (prev: number) => number) => {
     setPauseFactors(prev => ({
+      ...prev,
+      [reciter]: clampFactor(update(clampFactor(prev[reciter] ?? 0))),
+    }));
+  }, [reciter]);
+  const setVersePauseFactor = useCallback((update: (prev: number) => number) => {
+    setVersePauseFactors(prev => ({
       ...prev,
       [reciter]: clampFactor(update(clampFactor(prev[reciter] ?? 0))),
     }));
@@ -381,10 +402,11 @@ const App: React.FC = () => {
     localStorage.setItem('hifz_reciter', reciter);
     localStorage.setItem('hifz_verse_repeat', JSON.stringify(verseRepeat));
     localStorage.setItem('hifz_pause_factors', JSON.stringify(pauseFactors));
+    localStorage.setItem('hifz_verse_pause_factors', JSON.stringify(versePauseFactors));
     localStorage.setItem('hifz_playback_rate', JSON.stringify(playbackRate));
     localStorage.setItem('hifz_show_translation', JSON.stringify(showTranslation));
     localStorage.setItem('hifz_translation', translationEdition);
-  }, [reciter, verseRepeat, pauseFactors, playbackRate, showTranslation, translationEdition]);
+  }, [reciter, verseRepeat, pauseFactors, versePauseFactors, playbackRate, showTranslation, translationEdition]);
 
   // Theme: mirror the choice onto <html> so Tailwind's `dark:` variants take effect.
   useEffect(() => {
@@ -466,6 +488,7 @@ const App: React.FC = () => {
     passDurationRef.current = 0;
     countedIndicesRef.current.clear();
     setPassSeconds(prev => (prev === 0 ? prev : 0));
+    setVerseSeconds(prev => (prev === 0 ? prev : 0));
   }, [reciter, playbackRate]);
 
   // A changed range restarts the repeat bookkeeping and the pass measurement
@@ -568,22 +591,32 @@ const App: React.FC = () => {
     if (!currentSurah || !activeRange) return;
     playbackDrivenRef.current = true;
 
-    // Measure the pass: each verse contributes once, however often it repeats. Divided by
-    // the rate, because that is how long you actually listened to it.
+    // How long you actually listened to this verse - divided by the rate, and the basis for
+    // both pauses. Each verse contributes to the pass once, however often it repeats.
     const duration = audioRef.current?.duration;
-    if (Number.isFinite(duration) && !countedIndicesRef.current.has(currentAyahIndex)) {
-      countedIndicesRef.current.add(currentAyahIndex);
-      passDurationRef.current += (duration as number) / playbackRate;
+    const heard = Number.isFinite(duration) ? (duration as number) / playbackRate : 0;
+    if (heard > 0) {
+      setVerseSeconds(heard);
+      if (!countedIndicesRef.current.has(currentAyahIndex)) {
+        countedIndicesRef.current.add(currentAyahIndex);
+        passDurationRef.current += heard;
+      }
     }
+
+    // The verse pause follows every recitation of a verse - between its repeats just as much
+    // as between two verses - so there is room to say back what you just heard. At a factor
+    // of 0 `schedule` runs the callback straight away, which is the seamless behaviour this
+    // had before the pause existed.
+    const versePause = heard * versePauseFactor * 1000;
 
     playCountRef.current += 1;
     if (playCountRef.current < verseRepeat) {
-      goToAyah(currentAyahIndex); // repeats of the same verse run back to back
+      schedule(versePause, () => goToAyah(currentAyahIndex));
       return;
     }
     playCountRef.current = 0;
     if (currentAyahIndex < activeRange.end) {
-      goToAyah(currentAyahIndex + 1);
+      schedule(versePause, () => goToAyah(currentAyahIndex + 1));
       return;
     }
 
@@ -594,7 +627,7 @@ const App: React.FC = () => {
     passDurationRef.current = 0;
     countedIndicesRef.current.clear();
     schedule(passLength * pauseFactor * 1000, () => goToAyah(activeRange.start));
-  }, [activeRange, verseRepeat, pauseFactor, playbackRate, currentAyahIndex, currentSurah, schedule, goToAyah]);
+  }, [activeRange, verseRepeat, pauseFactor, versePauseFactor, playbackRate, currentAyahIndex, currentSurah, schedule, goToAyah]);
 
   const handleAudioError = useCallback(() => {
     console.error("Could not load audio for the current ayah");
@@ -637,6 +670,7 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 gap-2">
                   {RECITERS.map((r) => {
                     const factor = clampFactor(pauseFactors[r.id] ?? 0);
+                    const verseFactor = clampFactor(versePauseFactors[r.id] ?? 0);
                     return (
                       <button
                         key={r.id}
@@ -649,9 +683,12 @@ const App: React.FC = () => {
                       >
                         <span className="font-medium">{r.name}</span>
                         <span className="flex items-center gap-3">
-                          {factor > 0 && (
-                            <span className="text-xs font-semibold text-slate-400 tabular-nums" title="Saved pause factor">
-                              {factor}× pause
+                          {(factor > 0 || verseFactor > 0) && (
+                            <span
+                              className="text-xs font-semibold text-slate-400 tabular-nums"
+                              title="Saved pause factors: after each verse / after the block"
+                            >
+                              {verseFactor}× / {factor}× pause
                             </span>
                           )}
                           {reciter === r.id && <CheckCircle2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
@@ -1002,14 +1039,41 @@ const App: React.FC = () => {
 
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Pause</div>
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Pause after each verse</div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {/* Inert only when every verse end is also a block end: one verse,
+                            played once. Then the block pause already covers it. */}
+                        {activeCount < 2 && verseRepeat < 2
+                          ? 'Needs repeats or more than one verse'
+                          : verseSeconds > 0
+                            ? versePauseFactor > 0
+                              ? `≈ ${Math.round(verseSeconds * versePauseFactor)}s, repeats included`
+                              : 'Straight on to the next one'
+                            : 'Also between repeats of a verse'}
+                      </p>
+                    </div>
+                    <Stepper
+                      title={`Silence after every recitation of a verse - between its repeats as well as between verses - as a multiple of how long that verse takes${
+                        verseSeconds > 0 ? ` (last one ≈ ${Math.round(verseSeconds)}s)` : ''
+                      }`}
+                      value={`${versePauseFactor}×`}
+                      canDecrease={versePauseFactor > 0}
+                      canIncrease={versePauseFactor < MAX_PAUSE_FACTOR}
+                      onDecrease={() => setVersePauseFactor(v => Math.round((v - PAUSE_FACTOR_STEP) * 100) / 100)}
+                      onIncrease={() => setVersePauseFactor(v => Math.round((v + PAUSE_FACTOR_STEP) * 100) / 100)}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Pause after the block</div>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
                         {/* The factor multiplies the measured pass, so the concrete number only
                             exists once a full pass has been heard. */}
                         {passSeconds > 0
                           ? pauseFactor > 0
-                            ? `≈ ${Math.round(passSeconds * pauseFactor)}s before the block starts over`
-                            : 'No pause before the block starts over'
+                            ? `≈ ${Math.round(passSeconds * pauseFactor)}s before it starts over`
+                            : 'Straight back to the start'
                           : 'A multiple of how long one pass takes'}
                       </p>
                     </div>
@@ -1026,7 +1090,7 @@ const App: React.FC = () => {
                   </div>
 
                   <p className="pt-1 text-xs text-slate-400 border-t border-slate-100 dark:border-slate-800">
-                    Pause is saved for {reciterName} — reciters differ in tempo.
+                    Both pauses are saved for {reciterName} — reciters differ in tempo.
                   </p>
                 </div>
               </div>

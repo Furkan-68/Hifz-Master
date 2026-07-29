@@ -28,15 +28,21 @@ selected, the current verse is the block — so the controls always do something
 **Repeat each verse.** 1–10× before moving on. Repeats run back to back; the pause sits only
 at the end of a full pass.
 
-All three dials — speed, repeats and pause — live behind the slider button next to the play
-controls. It opens a small panel above the bar, so the verses stay readable while you adjust
-something mid-recitation.
+All four dials — speed, repeats and the two pauses — live behind the slider button next to the
+play controls. It opens a small panel above the bar, so the verses stay readable while you
+adjust something mid-recitation.
 
-**Pause proportional to the material.** Instead of a fixed number of seconds, the silence is a
-multiple (0–3×) of how long one pass through the block actually took — measured while it
-plays, so it accounts for the playback speed. A one-verse block gets a pause the length of that
-verse; a five-verse block gets five times as much. Because reciters differ in tempo, the factor
-is **saved per reciter**.
+**Two pauses, both proportional to the material.** Instead of a fixed number of seconds, each
+silence is a multiple (0–3×) of what you just listened to — measured while it plays, so it
+accounts for the playback speed:
+
+- **After each verse**, sized by that verse. This is the gap you recite into, and it follows
+  every recitation — between the repeats of one verse just as much as between two verses.
+- **After the block**, sized by a full pass through it, before it starts over. A one-verse
+  block gets a pause the length of that verse; a five-verse block gets five times as much.
+
+Both default to 0×, which is the old back-to-back behaviour. Because reciters differ in tempo,
+both factors are **saved per reciter**.
 
 **Playback speed.** 0.5× to 2×. Pitch is preserved, so slowing down does not distort the maqam.
 
@@ -96,8 +102,11 @@ Icons are `lucide-react`. State is plain `useState`; there is no state managemen
 ### The playback engine
 
 One state machine drives everything. `activeRange` is the drag selection, or the current verse
-when there is none, and `handleAudioEnd` walks it: repeat the verse `n` times → advance → at the
-end of the block, measure the pass, wait `pass × factor`, start over.
+when there is none, and `handleAudioEnd` walks it: after every recitation wait
+`verse × verseFactor`, repeat the verse `n` times, advance, and at the end of the block measure
+the pass and wait `pass × factor` before starting over. Both waits go through `schedule`, which
+runs its callback immediately at a factor of 0 — that is what keeps 0× exactly as seamless as
+it was before.
 
 Two things in there are load-bearing and easy to break:
 
@@ -142,7 +151,8 @@ still needs a connection; the text does not.
 | `hifz_selection` | `{ surah, start, end }` — one selection at a time |
 | `hifz_reciter` | Edition id of the reciter |
 | `hifz_verse_repeat` | Repeats per verse |
-| `hifz_pause_factors` | `{ reciterId: factor }` |
+| `hifz_pause_factors` | `{ reciterId: factor }` — the pause after the block |
+| `hifz_verse_pause_factors` | `{ reciterId: factor }` — the pause after each verse |
 | `hifz_playback_rate` | Playback speed |
 | `hifz_show_translation`, `hifz_translation` | Translation on/off and edition id |
 
