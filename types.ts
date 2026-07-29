@@ -9,17 +9,9 @@ export interface Surah {
 }
 
 export interface Ayah {
-  number: number;
-  audio: string;
-  audioSecondary: string[];
-  text: string;
+  number: number;       // global, 1-6236 - this is what addresses the audio file
   numberInSurah: number;
-  juz: number;
-  manzil: number;
-  page: number;
-  ruku: number;
-  hizbQuarter: number;
-  sajda: boolean;
+  text: string;
 }
 
 export interface SurahDetail extends Surah {
@@ -29,13 +21,4 @@ export interface SurahDetail extends Surah {
 export interface AyahRange {
   start: number; // 0-based index into SurahDetail.ayahs, inclusive
   end: number;   // 0-based index into SurahDetail.ayahs, inclusive, always >= start
-}
-
-export interface Reciter {
-  identifier: string;
-  language: string;
-  name: string;
-  englishName: string;
-  format: string;
-  type: string;
 }

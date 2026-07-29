@@ -1,10 +1,17 @@
+# todo
+- Review Modus, Leerzeichen um die nächste Ayah anzuzeigen
+- Seitenansicht mit korrektem Page break
+- Pause anch jedem Vers oder nach dem Block
+- Korrektur beim Lesen AI gestützt 
+
 # Hifz Master
 
 A Qur'an memorization companion. Pick a range of verses by dragging across them, then drill
 that block on a loop — with per-verse repeats, a pause sized to what you just heard,
 adjustable playback speed, and a record of what you already know.
 
-Runs entirely in the browser. No account, no backend, no API key.
+Runs entirely in the browser. No account, no backend, no API key. The text ships with the app —
+only the recitation comes off the network.
 
 ---
 
@@ -31,7 +38,8 @@ is **saved per reciter**.
 
 **English translation (optional).** Off by default. Switch it on in the settings panel and pick
 one of five editions — Talal Itani's *Clear Qur'an*, Saheeh International, Pickthall, Yusuf Ali,
-or Muhammad Asad. The translation appears under each verse and is cached per surah and edition.
+or Muhammad Asad. The translation appears under each verse. All five ship with the app; the one
+you pick is read from disk once and then kept in memory.
 
 **Track what you have learned.** Mark a single verse with the check button on its card, the
 whole current block from the practice bar, or an entire surah from the sidebar. Each surah row
@@ -59,6 +67,7 @@ set in `vite.config.ts`.
 | `npm run dev` | Vite dev server with hot reload |
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the built output |
+| `npm run fetch:quran` | Re-download the text into `public/data/` (rarely needed — see below) |
 | `npx tsc --noEmit` | Type check (not part of the build — Vite transpiles without checking) |
 
 There is no test suite.
@@ -76,8 +85,9 @@ Icons are `lucide-react`. State is plain `useState`; there is no state managemen
 | `App.tsx` | Everything stateful: playback engine, settings, sidebar, practice bar |
 | `components/AyahRow.tsx` | One verse card. Memoized — a drag updates the range every pointer frame, and Al-Baqara has 286 rows |
 | `hooks/useVerseRangeSelection.ts` | The drag gesture: pointer events, touch long-press, edge auto-scroll, hit testing |
-| `services/quranApi.ts` | The four API calls and the audio URL builder |
-| `types.ts` | `Surah`, `Ayah`, `SurahDetail`, `AyahRange`, `Reciter` |
+| `services/quranApi.ts` | Reads the bundled text into memory and hands out surahs; builds the audio URL |
+| `scripts/fetch-quran.mjs` | Downloads and checks that text. Run by hand, not by the build |
+| `types.ts` | `Surah`, `Ayah`, `SurahDetail`, `AyahRange` |
 
 ### The playback engine
 
@@ -97,14 +107,28 @@ Two things in there are load-bearing and easy to break:
 
 ## Where the data comes from
 
-- **Text and metadata:** [alquran.cloud](https://alquran.cloud/api) — surah list, verses, and
-  the translation editions.
-- **Audio:** `cdn.islamic.network`, one MP3 per verse, addressed by the *global* ayah number
-  (1–6236), not the number within the surah.
+**The text ships with the app.** All 6236 verses and all five translations live in
+`public/data/` — nothing is fetched from a text API at runtime. Switching surahs is a memory
+read, so it is instant and works offline.
 
-Both are public and keyless. A wrong translation identifier does **not** return an error — the
-API answers `200` and quietly falls back to the plain Arabic text, so `fetchTranslation`
-verifies the identifier of what came back.
+The files are generated, not written by hand:
+
+```bash
+npm run fetch:quran
+```
+
+That downloads everything from [alquran.cloud](https://alquran.cloud/api) in six requests,
+normalizes it, checks it, and writes `public/data/`. It is deliberately **not** part of the
+build — a build must not depend on the network. See `public/data/README.md` for what it
+normalizes, and for the sources and their terms.
+
+Sizes: 1.3 MB of Arabic (265 KB gzipped, loaded once at startup) and 756 KB–1.1 MB per
+translation, fetched the first time you pick that edition.
+
+**Audio is the exception** and still comes from `cdn.islamic.network` — one MP3 per verse,
+addressed by the *global* ayah number (1–6236), not the number within the surah. A full
+recitation runs to about 1.5 GB per reciter, which is not something to ship. Playback therefore
+still needs a connection; the text does not.
 
 ### Stored keys
 
@@ -134,3 +158,5 @@ was still shared across reciters.
   clears it.
 - **No way to reset all progress at once.** A surah marked by accident can be unmarked with the
   same button, but there is no global reset.
+- **Playback still needs a connection.** The text is local, the recitation is not — about 1.5 GB
+  per reciter is too much to ship. Read and mark verses offline; hearing them needs the network.

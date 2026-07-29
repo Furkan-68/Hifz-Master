@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Surah, SurahDetail, AyahRange } from './types';
-import { fetchSurahs, fetchSurahDetail, fetchTranslation, getAyahAudioUrl } from './services/quranApi';
+import { loadQuranData, getSurahs, getSurahDetail, fetchTranslation, getAyahAudioUrl } from './services/quranApi';
 import AyahRow from './components/AyahRow';
 import { useVerseRangeSelection } from './hooks/useVerseRangeSelection';
 import {
@@ -43,8 +43,9 @@ const MIN_PLAYBACK_RATE = 0.5;
 const MAX_PLAYBACK_RATE = 2;
 const PLAYBACK_RATE_STEP = 0.25;
 
-// alquran.cloud text editions, all verified to exist. Note that M.A.S. Abdel Haleem is
-// only on quran.com, not here.
+// Edition ids, matching the files in public/data/translations. Adding one here means adding
+// it to TRANSLATIONS in scripts/fetch-quran.mjs and re-running `npm run fetch:quran`.
+// Note that M.A.S. Abdel Haleem is only on quran.com, so alquran.cloud cannot supply it.
 const TRANSLATIONS = [
   { id: 'en.itani', name: "Clear Qur'an", author: 'Talal Itani' },
   { id: 'en.sahih', name: 'Saheeh International', author: 'Saheeh International' },
@@ -360,9 +361,10 @@ const App: React.FC = () => {
     const loadInitialData = async () => {
       setIsLoading(true);
       try {
-        const surahList = await fetchSurahs();
-        setSurahs(surahList);
-        await loadSurah(selectedSurahNumber);
+        // The only wait in the app's life: ~265 KB gzipped, then everything is in memory.
+        await loadQuranData();
+        setSurahs(getSurahs());
+        loadSurah(selectedSurahNumber);
       } catch (err) {
         console.error("Failed to load initial data", err);
       } finally {
@@ -520,19 +522,17 @@ const App: React.FC = () => {
 
   // --- Logic ---
 
-  const loadSurah = async (number: number) => {
-    setIsLoading(true);
+  // Synchronous since the text ships with the app: no spinner, no waiting between surahs.
+  const loadSurah = (number: number) => {
     stopPlayback();
     try {
-      const data = await fetchSurahDetail(number, reciter);
+      const data = getSurahDetail(number);
       const restored = readStoredSelection(number, data.ayahs.length);
       setCurrentSurah(data);
       setSelection(restored);
       setCurrentAyahIndex(restored ? restored.start : 0);
     } catch (err) {
       console.error("Failed to load surah", err);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -696,7 +696,7 @@ const App: React.FC = () => {
                         This translation could not be loaded. Pick another one or check your connection.
                       </p>
                     )}
-                    <p className="px-2 pt-1 text-xs text-slate-400">Translations via alquran.cloud</p>
+                    <p className="px-2 pt-1 text-xs text-slate-400">Bundled with the app, from alquran.cloud</p>
                   </div>
                 )}
               </div>

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "fetch:quran": "node scripts/fetch-quran.mjs"
   },
   "dependencies": {
     "react": "^19.2.4",
