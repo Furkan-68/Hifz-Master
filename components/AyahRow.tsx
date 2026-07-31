@@ -97,7 +97,7 @@ const AyahRow: React.FC<AyahRowProps> = ({
             </button>
           </div>
           <div
-            className={`font-arabic-display text-3xl leading-[2.5rem] text-right text-slate-800 dark:text-slate-100 transition-colors w-full ${
+            className={`font-arabic-display text-right text-slate-800 dark:text-slate-100 transition-colors w-full ${
               isCurrent ? 'text-indigo-900 dark:text-indigo-200' : ''
             }`}
             dir="rtl"

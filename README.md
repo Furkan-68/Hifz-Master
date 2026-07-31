@@ -51,6 +51,19 @@ one of five editions — Talal Itani's *Clear Qur'an*, Saheeh International, Pic
 or Muhammad Asad. The translation appears under each verse. All five ship with the app; the one
 you pick is read from disk once and then kept in memory.
 
+**Pick the Arabic typeface.** Four faces for the verses, chosen in the settings panel and shown
+there as a specimen rather than by name — Scheherazade New (the default), Amiri Quran, Amiri and
+Noto Naskh Arabic. Each carries its own size and line height, so switching does not change how
+densely the block sits: at the same pixel size Arabic faces differ far more than Latin ones do,
+and Noto in particular sets a short alef over a wide run.
+
+The font of the printed Madinah Mushaf (KFGQPC) is deliberately not among them. It expects the
+KFGQPC text edition, in which a silent alef carries `U+0652`; the Tanzil text bundled here writes
+it as `U+06DF`, which that font cannot attach — it draws a placeholder circle instead, at 3,988
+places in the Qur'an. Neither version 0.18 nor 2022's V22 differs in this. Offering it means
+shipping its text edition alongside it; see `todo.md`. The four that are offered were each
+checked against all 69 codepoints the bundled text uses.
+
 **Track what you have learned.** Mark a single verse with the check button on its card, or an
 entire surah from the sidebar. Each surah row shows `learned/total` and a hairline progress bar;
 the sidebar header shows the overall count.
@@ -88,10 +101,14 @@ There is no test suite.
 
 React 19 + TypeScript, bundled by Vite. Tailwind comes from a CDN `<script>` in `index.html`,
 so there is no CSS build step and no `tailwind.config.js` — utility classes are written inline.
+The Arabic type is the one exception: family, size and leading per face sit in a `<style>` block
+in `index.html`, because a Tailwind size utility and that rule carry equal specificity and the
+CDN decides which is injected last.
 Icons are `lucide-react`. State is plain `useState`; there is no state management library.
 
 | File | Role |
 |---|---|
+| `index.html` | Tailwind's CDN tag, the pre-paint theme and font script, and every Arabic font definition — family, size and leading per face |
 | `App.tsx` | Everything stateful: playback engine, settings, sidebar, practice bar |
 | `components/AyahRow.tsx` | One verse card. Memoized — a drag updates the range every pointer frame, and Al-Baqara has 286 rows |
 | `hooks/useVerseRangeSelection.ts` | The drag gesture: pointer events, touch long-press, edge auto-scroll, hit testing |
@@ -155,6 +172,7 @@ still needs a connection; the text does not.
 | `hifz_verse_pause_factors` | `{ reciterId: factor }` — the pause after each verse |
 | `hifz_playback_rate` | Playback speed |
 | `hifz_show_translation`, `hifz_translation` | Translation on/off and edition id |
+| `hifz_arabic_font` | Id of the Arabic face, matching a `[data-arabic-font]` rule in `index.html` |
 
 `hifz_pause_factor` (singular) is only read once, to migrate a value from when the pause factor
 was still shared across reciters.

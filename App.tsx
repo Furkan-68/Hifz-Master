@@ -22,7 +22,8 @@ import {
   Monitor,
   Sun,
   Moon,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Type
 } from 'lucide-react';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -54,6 +55,26 @@ const TRANSLATIONS = [
   { id: 'en.yusufali', name: 'Yusuf Ali', author: 'Abdullah Yusuf Ali' },
   { id: 'en.asad', name: 'The Message of the Qur’an', author: 'Muhammad Asad' }
 ];
+
+// The ids match the [data-arabic-font] rules in index.html, which hold the actual font families
+// and their size and leading. Nothing about a font file belongs in here.
+//
+// All four were checked against every one of the 69 codepoints in public/data/quran.json: they
+// render the Tanzil Uthmani text, marks and all. The obvious omission is the KFGQPC font of the
+// printed Madinah Mushaf, which cannot - it expects the KFGQPC text edition, where a silent
+// alef carries U+0652 rather than the U+06DF this text uses. See todo.md.
+const ARABIC_FONTS = [
+  { id: 'scheherazade', name: 'Scheherazade New', note: 'Naskh, SIL — the default' },
+  { id: 'amiri-quran', name: 'Amiri Quran', note: 'Naskh of the 1924 Cairo edition' },
+  { id: 'amiri', name: 'Amiri', note: 'The same face, wider and less compact' },
+  { id: 'noto-naskh', name: 'Noto Naskh Arabic', note: 'Modern Naskh, Google' }
+];
+
+const DEFAULT_ARABIC_FONT = 'scheherazade';
+
+// Printed as a heading above every surah but Al-Fatiha and At-Tawba, and used as the specimen
+// in the font picker - a line you will actually read, rather than a pangram.
+const BASMALA = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';
 
 const RECITERS = [
   { id: 'ar.alafasy', name: 'Mishary Rashid Alafasy' },
@@ -200,6 +221,10 @@ const App: React.FC = () => {
   });
   const [translationEdition, setTranslationEdition] = useState<string>(() => {
     return localStorage.getItem('hifz_translation') || 'en.itani';
+  });
+  const [arabicFont, setArabicFont] = useState<string>(() => {
+    const saved = localStorage.getItem('hifz_arabic_font');
+    return ARABIC_FONTS.some(f => f.id === saved) ? saved! : DEFAULT_ARABIC_FONT;
   });
   // Kept parallel to currentSurah.ayahs rather than merged into them, so the fetched API
   // objects stay untouched and caching per edition stays trivial.
@@ -420,6 +445,13 @@ const App: React.FC = () => {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
+
+  // Arabic font: same idea, one attribute on <html>. index.html turns it into a font family,
+  // a size and a leading, so switching costs a repaint and not a re-render of the verse list.
+  useEffect(() => {
+    document.documentElement.dataset.arabicFont = arabicFont;
+    localStorage.setItem('hifz_arabic_font', arabicFont);
+  }, [arabicFont]);
 
   // Progress gets its own effect: it is the largest object we store and should not be
   // rewritten every time a stepper or the reciter changes.
@@ -742,6 +774,43 @@ const App: React.FC = () => {
                 )}
               </div>
 
+              <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                <label className="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                  <Type className="w-4 h-4" />
+                  Arabic Font
+                </label>
+                <div className="grid grid-cols-1 gap-2">
+                  {ARABIC_FONTS.map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => setArabicFont(f.id)}
+                      className={`flex items-center justify-between gap-3 p-4 rounded-xl border-2 transition-all text-left ${
+                        arabicFont === f.id
+                          ? 'border-indigo-600 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200'
+                          : 'border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      <span className="flex flex-col min-w-0">
+                        <span className="font-medium">{f.name}</span>
+                        <span className="text-xs text-slate-400">{f.note}</span>
+                      </span>
+                      <span className="flex items-center gap-3 shrink-0">
+                        {/* You pick a font by how it looks, not by its name. */}
+                        <span
+                          data-font-sample={f.id}
+                          dir="rtl"
+                          aria-hidden="true"
+                          className="font-arabic-sample text-slate-700 dark:text-slate-200"
+                        >
+                          {BASMALA}
+                        </span>
+                        {arabicFont === f.id && <CheckCircle2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <p className="pt-4 border-t border-slate-100 dark:border-slate-800 px-2 text-xs text-slate-400">
                 Tip: drag across the verses to select a range — on touch, hold a verse first.
                 Without a selection the controls apply to the current verse.
@@ -935,8 +1004,8 @@ const App: React.FC = () => {
             <div className="space-y-12 pb-48">
               {currentSurah.number !== 1 && currentSurah.number !== 9 && (
                 <div className="text-center">
-                  <div className="font-arabic-display text-4xl text-slate-700 dark:text-slate-200 leading-relaxed mb-8">
-                    بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ
+                  <div className="font-arabic-display font-arabic-lg text-slate-700 dark:text-slate-200 mb-8">
+                    {BASMALA}
                   </div>
                 </div>
               )}
