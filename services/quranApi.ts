@@ -74,6 +74,31 @@ export const getSurahDetail = (surahNumber: number): SurahDetail => {
   return { ...surah, ayahs };
 };
 
+export const TOTAL_AYAHS = 6236;
+
+/**
+ * Global ayah number (1-6236) -> the verse and the surah holding it. The counterpart to the
+ * numbering `getSurahDetail` hands out, and what lets a range span two surahs.
+ */
+export const getAyahByNumber = (number: number): { ayah: Ayah; surah: Surah } | null => {
+  const data = loaded();
+  if (!Number.isInteger(number) || number < 1 || number > TOTAL_AYAHS) return null;
+
+  // 114 entries, so scanning from the back beats maintaining an index of 6236.
+  let index = 0;
+  for (let i = data.globalOffsets.length - 1; i >= 0; i--) {
+    if (number > data.globalOffsets[i]) {
+      index = i;
+      break;
+    }
+  }
+  const numberInSurah = number - data.globalOffsets[index];
+  return {
+    surah: data.surahs[index],
+    ayah: { number, numberInSurah, text: data.verses[index][numberInSurah - 1] },
+  };
+};
+
 // One file per edition, fetched the first time that edition is shown and kept afterwards.
 const translations = new Map<string, Promise<string[][]>>();
 

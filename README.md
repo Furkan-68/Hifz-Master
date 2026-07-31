@@ -64,6 +64,17 @@ places in the Qur'an. Neither version 0.18 nor 2022's V22 differs in this. Offer
 shipping its text edition alongside it; see `todo.md`. The four that are offered were each
 checked against all 69 codepoints the bundled text uses.
 
+**Read the printed page.** A second view sets the Madinah Mushaf line for line as it is printed —
+604 pages, the ornamental band and basmala at each surah, the verse numbers in their rosettes.
+Switch to it with the book button in the header. Selecting a range works exactly as in the list:
+drag across the words, and the highlight follows the text around the line breaks. Playback,
+repeats and pauses are unchanged; the page turns by itself when the recitation leaves it.
+
+This view is built on the QCF page fonts — one font file per page, one glyph per word — which is
+the only way to reproduce the printed line breaks. That has consequences worth knowing: the page
+fonts come off a CDN, so this view needs a connection, and it shows no progress marks. Mark
+verses in the list view.
+
 **Track what you have learned.** Mark a single verse with the check button on its card, or an
 entire surah from the sidebar. Each surah row shows `learned/total` and a hairline progress bar;
 the sidebar header shows the overall count.
@@ -91,6 +102,7 @@ set in `vite.config.ts`.
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the built output |
 | `npm run fetch:quran` | Re-download the text into `public/data/` (rarely needed — see below) |
+| `npm run fetch:mushaf` | Re-download the Mushaf page layout (604 requests, about a minute) |
 | `npx tsc --noEmit` | Type check (not part of the build — Vite transpiles without checking) |
 
 There is no test suite.
@@ -111,6 +123,9 @@ Icons are `lucide-react`. State is plain `useState`; there is no state managemen
 | `index.html` | Tailwind's CDN tag, the pre-paint theme and font script, and every Arabic font definition — family, size and leading per face |
 | `App.tsx` | Everything stateful: playback engine, settings, sidebar, practice bar |
 | `components/AyahRow.tsx` | One verse card. Memoized — a drag updates the range every pointer frame, and Al-Baqara has 286 rows |
+| `components/MushafPage.tsx` | One printed page: its lines, the surah bands, and the type size measured to fit the measure |
+| `services/mushaf.ts` | Loads the page layout on first use, and one QCF font per page from a CDN |
+| `scripts/fetch-mushaf.mjs` | Downloads and checks that layout. Run by hand, not by the build |
 | `hooks/useVerseRangeSelection.ts` | The drag gesture: pointer events, touch long-press, edge auto-scroll, hit testing |
 | `services/quranApi.ts` | Reads the bundled text into memory and hands out surahs; builds the audio URL |
 | `scripts/fetch-quran.mjs` | Downloads and checks that text. Run by hand, not by the build |
@@ -173,6 +188,7 @@ still needs a connection; the text does not.
 | `hifz_playback_rate` | Playback speed |
 | `hifz_show_translation`, `hifz_translation` | Translation on/off and edition id |
 | `hifz_arabic_font` | Id of the Arabic face, matching a `[data-arabic-font]` rule in `index.html` |
+| `hifz_view` | `list` or `mushaf` |
 
 `hifz_pause_factor` (singular) is only read once, to migrate a value from when the pause factor
 was still shared across reciters.
@@ -185,7 +201,12 @@ was still shared across reciters.
   over. Listening to a whole surah straight through is therefore not really available; you would
   have to drag-select all 286 verses of Al-Baqara.
 - **Text in the verse list cannot be selected or copied.** Native text selection is suppressed so
-  that dragging picks verses instead of highlighting words.
+  that dragging picks verses instead of highlighting words. In the Mushaf view it could not work
+  anyway: those characters are per-page glyph codes, not Arabic.
+- **The Mushaf view needs a connection**, for its page fonts. It also shows no progress marks, and
+  its two ornamental lines are an approximation — the band is drawn from the surah name rather
+  than with the ornamental font the print uses, and the two surahs that get no blank line of their
+  own ('Abasa and At-Tariq) get no band at all. The verse lines themselves are exact.
 - **Progress is local to one browser.** No account, no sync, no export — clearing site data
   clears it.
 - **No way to reset all progress at once.** A surah marked by accident can be unmarked with the

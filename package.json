@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "fetch:quran": "node scripts/fetch-quran.mjs"
+    "fetch:quran": "node scripts/fetch-quran.mjs",
+    "fetch:mushaf": "node scripts/fetch-mushaf.mjs"
   },
   "dependencies": {
     "react": "^19.2.4",

@@ -16,10 +16,10 @@ export const normalizeRange = (a: number, b: number): AyahRange => ({
 interface SelectionOptions {
   // The scrolling element that holds the ayah list; used for edge auto-scroll.
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
-  // Playback cursor, used as the anchor for Shift+Click.
-  currentIndex: number;
+  // Playback cursor as a global ayah number, used as the anchor for Shift+Click.
+  currentNumber: number;
   // Called for a plain click on a verse (no drag, no modifier).
-  onActivate: (index: number) => void;
+  onActivate: (number: number) => void;
 }
 
 /**
@@ -29,15 +29,17 @@ interface SelectionOptions {
  * a normal swipe still scrolls the page.
  *
  * All returned handlers keep a stable identity so the rows can stay memoized; the verse
- * index is read from the `data-ayah-index` attribute instead of being closed over.
+ * number is read from the `data-ayah-number` attribute instead of being closed over. That
+ * attribute is all a view has to provide - a verse card in the list, a word span on a Mushaf
+ * page, the hit testing below does not care which.
  */
-export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onActivate }: SelectionOptions) => {
+export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onActivate }: SelectionOptions) => {
   const [selection, setSelection] = useState<AyahRange | null>(null);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
   // Mirrors of reactive values so the handlers below need no dependencies.
-  const currentIndexRef = useRef<number>(currentIndex);
-  currentIndexRef.current = currentIndex;
+  const currentNumberRef = useRef<number>(currentNumber);
+  currentNumberRef.current = currentNumber;
   const onActivateRef = useRef(onActivate);
   onActivateRef.current = onActivate;
 
@@ -47,7 +49,7 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
   const pointerIdRef = useRef<number | null>(null);
   const isDraggingRef = useRef<boolean>(false);
   const didDragRef = useRef<boolean>(false);
-  const lastIndexRef = useRef<number | null>(null);
+  const lastNumberRef = useRef<number | null>(null);
   const longPressRef = useRef<number | null>(null);
   const edgeRafRef = useRef<number | null>(null);
   const moveRafRef = useRef<number | null>(null);
@@ -58,23 +60,23 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
 
   // elementFromPoint rather than per-row onPointerEnter: on touch the pointer is
   // implicitly captured by the element it started on, so sibling rows never fire enter.
-  const readIndexAtPoint = useCallback((): number | null => {
+  const readNumberAtPoint = useCallback((): number | null => {
     const { x, y } = pointRef.current;
     const hit = document.elementFromPoint(x, y);
-    const row = hit ? hit.closest('[data-ayah-index]') : null;
-    if (!(row instanceof HTMLElement)) return null;
-    const index = Number(row.dataset.ayahIndex);
-    return Number.isFinite(index) ? index : null;
+    const target = hit ? hit.closest('[data-ayah-number]') : null;
+    if (!(target instanceof HTMLElement)) return null;
+    const number = Number(target.dataset.ayahNumber);
+    return Number.isFinite(number) ? number : null;
   }, []);
 
   const extendToPoint = useCallback(() => {
     const anchor = anchorRef.current;
     if (anchor === null || !isDraggingRef.current) return;
-    const index = readIndexAtPoint();
-    if (index === null || index === lastIndexRef.current) return;
-    lastIndexRef.current = index;
-    setSelection(normalizeRange(anchor, index));
-  }, [readIndexAtPoint]);
+    const number = readNumberAtPoint();
+    if (number === null || number === lastNumberRef.current) return;
+    lastNumberRef.current = number;
+    setSelection(normalizeRange(anchor, number));
+  }, [readNumberAtPoint]);
 
   // --- Edge auto-scroll (so a range can reach past the visible screen) ---
 
@@ -101,13 +103,13 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
 
   // --- Gesture lifecycle ---
 
-  const startDrag = useCallback((index: number) => {
+  const startDrag = useCallback((number: number) => {
     isDraggingRef.current = true;
     didDragRef.current = true;
-    anchorRef.current = index;
-    lastIndexRef.current = index;
+    anchorRef.current = number;
+    lastNumberRef.current = number;
     setIsDragging(true);
-    setSelection(normalizeRange(index, index));
+    setSelection(normalizeRange(number, number));
     if (edgeRafRef.current === null) {
       edgeRafRef.current = requestAnimationFrame(edgeScrollStep);
     }
@@ -131,7 +133,7 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
     isDraggingRef.current = false;
     anchorRef.current = null;
     originRef.current = null;
-    lastIndexRef.current = null;
+    lastNumberRef.current = null;
     pointerIdRef.current = null;
     setIsDragging(false);
     // didDragRef is deliberately left alone - the click event still has to see it.
@@ -139,12 +141,12 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
 
   const handleRowPointerDown = useCallback((e: React.PointerEvent<HTMLElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    const index = Number(e.currentTarget.dataset.ayahIndex);
-    if (!Number.isFinite(index)) return;
+    const number = Number(e.currentTarget.dataset.ayahNumber);
+    if (!Number.isFinite(number)) return;
 
     didDragRef.current = false;
-    anchorRef.current = index;
-    lastIndexRef.current = index;
+    anchorRef.current = number;
+    lastNumberRef.current = number;
     originRef.current = { x: e.clientX, y: e.clientY };
     pointRef.current = { x: e.clientX, y: e.clientY };
     pointerIdRef.current = e.pointerId;
@@ -155,7 +157,7 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
       longPressRef.current = window.setTimeout(() => {
         longPressRef.current = null;
         navigator.vibrate?.(10);
-        startDrag(index);
+        startDrag(number);
       }, LONG_PRESS_MS);
     }
   }, [startDrag]);
@@ -204,14 +206,14 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentIndex, onAct
       didDragRef.current = false; // this click is only the tail of a drag
       return;
     }
-    const index = Number(e.currentTarget.dataset.ayahIndex);
-    if (!Number.isFinite(index)) return;
+    const number = Number(e.currentTarget.dataset.ayahNumber);
+    if (!Number.isFinite(number)) return;
 
     if (e.shiftKey) {
-      setSelection(normalizeRange(currentIndexRef.current, index));
+      setSelection(normalizeRange(currentNumberRef.current, number));
       return;
     }
-    onActivateRef.current(index);
+    onActivateRef.current(number);
   }, []);
 
   // React attaches touchmove passively, so blocking the page scroll during a touch drag

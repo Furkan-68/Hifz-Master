@@ -1,8 +1,26 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Surah, SurahDetail, AyahRange } from './types';
-import { loadQuranData, getSurahs, getSurahDetail, fetchTranslation, getAyahAudioUrl } from './services/quranApi';
+import {
+  loadQuranData,
+  getSurahs,
+  getSurahDetail,
+  getAyahByNumber,
+  fetchTranslation,
+  getAyahAudioUrl,
+  TOTAL_AYAHS,
+} from './services/quranApi';
+import {
+  loadMushaf,
+  getMushafPage,
+  getPageOfAyah,
+  getPageRange,
+  loadPageFont,
+  warmPageFont,
+  MUSHAF_PAGES,
+} from './services/mushaf';
 import AyahRow from './components/AyahRow';
+import MushafPage from './components/MushafPage';
 import { useVerseRangeSelection } from './hooks/useVerseRangeSelection';
 import {
   Play,
@@ -23,10 +41,13 @@ import {
   Sun,
   Moon,
   SlidersHorizontal,
-  Type
+  Type,
+  BookMarked,
+  Rows3
 } from 'lucide-react';
 
 type Theme = 'system' | 'light' | 'dark';
+type View = 'list' | 'mushaf';
 
 // One control, three states - so the button cycles rather than toggles.
 const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
@@ -38,8 +59,6 @@ const MAX_VERSE_REPEAT = 10;
 // with the material instead of being a fixed number of seconds.
 const MAX_PAUSE_FACTOR = 3;
 const PAUSE_FACTOR_STEP = 0.25;
-
-const TOTAL_VERSES = 6236;
 
 const MIN_PLAYBACK_RATE = 0.5;
 const MAX_PLAYBACK_RATE = 2;
@@ -134,15 +153,16 @@ const readPauseFactors = (): PauseFactors => {
   return {};
 };
 
-// A verse range is stored for one surah at a time.
-const readStoredSelection = (surahNumber: number, ayahCount: number): AyahRange | null => {
+// One range at a time, in global ayah numbers. An entry carrying a `surah` key is from when
+// ranges were indices into a single surah - too little to migrate, so it is dropped.
+const readStoredSelection = (): AyahRange | null => {
   try {
     const raw = localStorage.getItem('hifz_selection');
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || parsed.surah !== surahNumber) return null;
-    const start = Math.max(0, Math.min(Number(parsed.start), ayahCount - 1));
-    const end = Math.max(start, Math.min(Number(parsed.end), ayahCount - 1));
+    if (!parsed || parsed.surah !== undefined) return null;
+    const start = Math.max(1, Math.min(Number(parsed.start), TOTAL_AYAHS));
+    const end = Math.max(start, Math.min(Number(parsed.end), TOTAL_AYAHS));
     if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
     return { start, end };
   } catch {
@@ -186,7 +206,8 @@ const App: React.FC = () => {
   const [surahs, setSurahs] = useState<Surah[]>([]);
   const [currentSurah, setCurrentSurah] = useState<SurahDetail | null>(null);
   const [selectedSurahNumber, setSelectedSurahNumber] = useState<number>(1);
-  const [currentAyahIndex, setCurrentAyahIndex] = useState<number>(0);
+  // The playback cursor, as a global ayah number. 0 until the first surah is loaded.
+  const [currentAyahNumber, setCurrentAyahNumber] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isPausing, setIsPausing] = useState<boolean>(false);
   const [verseRepeat, setVerseRepeat] = useState<number>(() => {
@@ -226,6 +247,14 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('hifz_arabic_font');
     return ARABIC_FONTS.some(f => f.id === saved) ? saved! : DEFAULT_ARABIC_FONT;
   });
+  const [view, setView] = useState<View>(
+    () => (localStorage.getItem('hifz_view') === 'mushaf' ? 'mushaf' : 'list')
+  );
+  const [mushafPage, setMushafPage] = useState<number>(1);
+  // The layout and each page's font arrive over time, so the page tracks its own readiness.
+  const [mushafReady, setMushafReady] = useState<boolean>(false);
+  const [pageFontReady, setPageFontReady] = useState<boolean>(false);
+  const [mushafFailed, setMushafFailed] = useState<boolean>(false);
   // Kept parallel to currentSurah.ayahs rather than merged into them, so the fetched API
   // objects stay untouched and caching per edition stays trivial.
   const [translations, setTranslations] = useState<string[] | null>(null);
@@ -262,9 +291,9 @@ const App: React.FC = () => {
   const playbackDrivenRef = useRef<boolean>(false);
   // Accumulates the current pass. Each verse counts once, so verse repeats do not inflate it.
   const passDurationRef = useRef<number>(0);
-  const countedIndicesRef = useRef<Set<number>>(new Set());
-  const currentAyahIndexRef = useRef<number>(currentAyahIndex);
-  currentAyahIndexRef.current = currentAyahIndex;
+  const countedAyahsRef = useRef<Set<number>>(new Set());
+  const currentAyahNumberRef = useRef<number>(currentAyahNumber);
+  currentAyahNumberRef.current = currentAyahNumber;
   const translationCacheRef = useRef<Map<string, string[]>>(new Map()); // `${surah}:${edition}`
   // Mirrors, so the per-row toggle can stay reference-stable and keep AyahRow memoized.
   const currentSurahRef = useRef<SurahDetail | null>(currentSurah);
@@ -370,23 +399,23 @@ const App: React.FC = () => {
   const goToAyah = useCallback((next: number) => {
     playbackIntentRef.current = true;
     setIsPlaying(true);
-    if (next === currentAyahIndexRef.current) {
+    if (next === currentAyahNumberRef.current) {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         safePlay();
       }
     } else {
-      setCurrentAyahIndex(next);
+      setCurrentAyahNumber(next);
     }
   }, [safePlay]);
 
   // --- Selection ---
 
-  const handleActivateAyah = useCallback((index: number) => {
+  const handleActivateAyah = useCallback((number: number) => {
     playbackDrivenRef.current = false;
     playCountRef.current = 0;
     clearPauseTimer();
-    setCurrentAyahIndex(index);
+    setCurrentAyahNumber(number);
   }, [clearPauseTimer]);
 
   const {
@@ -398,7 +427,7 @@ const App: React.FC = () => {
     rowProps,
   } = useVerseRangeSelection({
     scrollContainerRef,
-    currentIndex: currentAyahIndex,
+    currentNumber: currentAyahNumber,
     onActivate: handleActivateAyah,
   });
 
@@ -453,6 +482,40 @@ const App: React.FC = () => {
     localStorage.setItem('hifz_arabic_font', arabicFont);
   }, [arabicFont]);
 
+  // The Mushaf layout is 697 KB that the list view never needs, so it waits until the view is
+  // opened for the first time rather than joining the startup load.
+  useEffect(() => {
+    localStorage.setItem('hifz_view', view);
+    if (view !== 'mushaf' || mushafReady) return;
+    let cancelled = false;
+    loadMushaf()
+      .then(() => {
+        if (cancelled) return;
+        setMushafReady(true);
+        // Open on the page holding whatever is being practised, not on page 1.
+        if (currentAyahNumber) setMushafPage(getPageOfAyah(currentAyahNumber));
+      })
+      .catch(err => {
+        console.error('Failed to load the Mushaf layout', err);
+        if (!cancelled) setMushafFailed(true);
+      });
+    return () => { cancelled = true; };
+  }, [view, mushafReady, currentAyahNumber]);
+
+  // One page's font, plus its neighbours in the background so turning does not stall.
+  useEffect(() => {
+    if (view !== 'mushaf' || !mushafReady) return;
+    let cancelled = false;
+    setPageFontReady(false);
+    loadPageFont(mushafPage)
+      .then(() => { if (!cancelled) setPageFontReady(true); })
+      .catch(err => { console.error(`Failed to load the font for page ${mushafPage}`, err); });
+    warmPageFont(mushafPage + 1);
+    warmPageFont(mushafPage - 1);
+    return () => { cancelled = true; };
+  }, [view, mushafReady, mushafPage]);
+
+
   // Progress gets its own effect: it is the largest object we store and should not be
   // rewritten every time a stepper or the reciter changes.
   useEffect(() => {
@@ -498,27 +561,26 @@ const App: React.FC = () => {
     audio.preservesPitch = true; // keep the maqam intact when slowing down
     audio.defaultPlaybackRate = playbackRate;
     audio.playbackRate = playbackRate;
-  }, [playbackRate, currentAyahIndex, currentSurah, reciter]);
+  }, [playbackRate, currentAyahNumber, currentSurah, reciter]);
 
-  // Persist the verse range for the surah it belongs to
+  // Persist the verse range. Global numbers, so it no longer belongs to one surah.
   useEffect(() => {
-    if (!currentSurah) return;
     if (selection) {
-      localStorage.setItem('hifz_selection', JSON.stringify({ surah: currentSurah.number, ...selection }));
+      localStorage.setItem('hifz_selection', JSON.stringify(selection));
     } else {
       localStorage.removeItem('hifz_selection');
     }
-  }, [selection, currentSurah]);
+  }, [selection]);
 
   // Keep playing across source changes
   useEffect(() => {
     if (playbackIntentRef.current) safePlay();
-  }, [currentAyahIndex, currentSurah, reciter]);
+  }, [currentAyahNumber, currentSurah, reciter]);
 
   // A different reciter or speed means different listening times, so measuring starts over
   useEffect(() => {
     passDurationRef.current = 0;
-    countedIndicesRef.current.clear();
+    countedAyahsRef.current.clear();
     setPassSeconds(prev => (prev === 0 ? prev : 0));
     setVerseSeconds(prev => (prev === 0 ? prev : 0));
   }, [reciter, playbackRate]);
@@ -527,7 +589,7 @@ const App: React.FC = () => {
   useEffect(() => {
     playCountRef.current = 0;
     passDurationRef.current = 0;
-    countedIndicesRef.current.clear();
+    countedAyahsRef.current.clear();
     setPassSeconds(prev => (prev === 0 ? prev : 0));
     clearPauseTimer();
   }, [selection, clearPauseTimer]);
@@ -535,33 +597,40 @@ const App: React.FC = () => {
   // Once the drag settles, pull the cursor into the new range
   useEffect(() => {
     if (isDragging || !selection) return;
-    setCurrentAyahIndex(prev => (prev < selection.start || prev > selection.end) ? selection.start : prev);
+    setCurrentAyahNumber(prev => (prev < selection.start || prev > selection.end) ? selection.start : prev);
   }, [isDragging, selection]);
 
-  // Follow along while the loop runs, but never fight a drag or a manual click
+  // Follow along while the loop runs, but never fight a drag or a manual click. The list
+  // scrolls the verse into view; the Mushaf turns the page when the recitation leaves it.
   useEffect(() => {
     if (!playbackDrivenRef.current || isDragging) return;
     playbackDrivenRef.current = false;
-    document.getElementById(`ayah-${currentAyahIndex}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [currentAyahIndex]);
+    if (view === 'mushaf') {
+      if (mushafReady) setMushafPage(prev => {
+        const page = getPageOfAyah(currentAyahNumber);
+        return page === prev ? prev : page;
+      });
+      return;
+    }
+    document.getElementById(`ayah-${currentAyahNumber}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [currentAyahNumber]);
 
   // Warm up the next verse so the loop does not stutter on the wrap-around
   useEffect(() => {
-    if (!currentSurah) return;
-    const ayahs = currentSurah.ayahs;
-    const nextIndex = selection
-      ? (currentAyahIndex < selection.end ? currentAyahIndex + 1 : selection.start)
-      : Math.min(currentAyahIndex + 1, ayahs.length - 1);
-    if (nextIndex === currentAyahIndex || !ayahs[nextIndex]) return;
+    if (!currentAyahNumber) return;
+    const next = selection
+      ? (currentAyahNumber < selection.end ? currentAyahNumber + 1 : selection.start)
+      : Math.min(currentAyahNumber + 1, TOTAL_AYAHS);
+    if (next === currentAyahNumber) return;
 
-    const preload = new Audio(getAyahAudioUrl(ayahs[nextIndex].number, reciter));
+    const preload = new Audio(getAyahAudioUrl(next, reciter));
     preload.preload = 'auto';
     preload.load();
     return () => {
       preload.removeAttribute('src');
       preload.load();
     };
-  }, [currentAyahIndex, currentSurah, reciter, selection]);
+  }, [currentAyahNumber, reciter, selection]);
 
   // Escape closes whatever is open on top, and only then clears the range
   useEffect(() => {
@@ -586,10 +655,18 @@ const App: React.FC = () => {
     stopPlayback();
     try {
       const data = getSurahDetail(number);
-      const restored = readStoredSelection(number, data.ayahs.length);
+      const first = data.ayahs[0].number;
+      const last = data.ayahs[data.ayahs.length - 1].number;
+      // A range is global now, so it may point at a surah other than the one being opened.
+      // Keeping such a range would leave the list with nothing highlighted, so it goes.
+      const stored = readStoredSelection();
+      const restored = stored && stored.end >= first && stored.start <= last ? stored : null;
+      const cursor = restored ? Math.max(restored.start, first) : first;
       setCurrentSurah(data);
       setSelection(restored);
-      setCurrentAyahIndex(restored ? restored.start : 0);
+      setCurrentAyahNumber(cursor);
+      // Picking a surah from the sidebar should open its page, not just move the cursor.
+      if (mushafReady) setMushafPage(getPageOfAyah(cursor));
     } catch (err) {
       console.error("Failed to load surah", err);
     }
@@ -602,8 +679,8 @@ const App: React.FC = () => {
     }
     playCountRef.current = 0;
     passDurationRef.current = 0;
-    countedIndicesRef.current.clear();
-    if (selection && (currentAyahIndex < selection.start || currentAyahIndex > selection.end)) {
+    countedAyahsRef.current.clear();
+    if (selection && (currentAyahNumber < selection.start || currentAyahNumber > selection.end)) {
       goToAyah(selection.start);
     } else {
       safePlay();
@@ -615,12 +692,12 @@ const App: React.FC = () => {
   // and the speed meaningful even when nothing is selected.
   // Declared before handleAudioEnd on purpose: its dependency array is evaluated during
   // render, so a later `const` would blow up with a ReferenceError.
-  const activeRange: AyahRange | null = currentSurah
-    ? (selection ?? { start: currentAyahIndex, end: currentAyahIndex })
+  const activeRange: AyahRange | null = currentAyahNumber
+    ? (selection ?? { start: currentAyahNumber, end: currentAyahNumber })
     : null;
 
   const handleAudioEnd = useCallback(() => {
-    if (!currentSurah || !activeRange) return;
+    if (!activeRange) return;
     playbackDrivenRef.current = true;
 
     // How long you actually listened to this verse - divided by the rate, and the basis for
@@ -629,8 +706,8 @@ const App: React.FC = () => {
     const heard = Number.isFinite(duration) ? (duration as number) / playbackRate : 0;
     if (heard > 0) {
       setVerseSeconds(heard);
-      if (!countedIndicesRef.current.has(currentAyahIndex)) {
-        countedIndicesRef.current.add(currentAyahIndex);
+      if (!countedAyahsRef.current.has(currentAyahNumber)) {
+        countedAyahsRef.current.add(currentAyahNumber);
         passDurationRef.current += heard;
       }
     }
@@ -643,12 +720,12 @@ const App: React.FC = () => {
 
     playCountRef.current += 1;
     if (playCountRef.current < verseRepeat) {
-      schedule(versePause, () => goToAyah(currentAyahIndex));
+      schedule(versePause, () => goToAyah(currentAyahNumber));
       return;
     }
     playCountRef.current = 0;
-    if (currentAyahIndex < activeRange.end) {
-      schedule(versePause, () => goToAyah(currentAyahIndex + 1));
+    if (currentAyahNumber < activeRange.end) {
+      schedule(versePause, () => goToAyah(currentAyahNumber + 1));
       return;
     }
 
@@ -657,9 +734,9 @@ const App: React.FC = () => {
     const passLength = passDurationRef.current;
     setPassSeconds(passLength);
     passDurationRef.current = 0;
-    countedIndicesRef.current.clear();
+    countedAyahsRef.current.clear();
     schedule(passLength * pauseFactor * 1000, () => goToAyah(activeRange.start));
-  }, [activeRange, verseRepeat, pauseFactor, versePauseFactor, playbackRate, currentAyahIndex, currentSurah, schedule, goToAyah]);
+  }, [activeRange, verseRepeat, pauseFactor, versePauseFactor, playbackRate, currentAyahNumber, schedule, goToAyah]);
 
   const handleAudioError = useCallback(() => {
     console.error("Could not load audio for the current ayah");
@@ -671,9 +748,51 @@ const App: React.FC = () => {
     s.number.toString().includes(searchTerm)
   );
 
-  const currentAyah = currentSurah?.ayahs[currentAyahIndex];
+  // Looked up rather than indexed into the open surah: the cursor is a global number, and in
+  // the Mushaf view it may sit in a surah other than the one the sidebar has selected.
+  const currentAyah = currentAyahNumber ? getAyahByNumber(currentAyahNumber)?.ayah : undefined;
   const reciterName = RECITERS.find(r => r.id === reciter)?.name ?? reciter;
   const activeCount = activeRange ? activeRange.end - activeRange.start + 1 : 0;
+
+  // The surahs printed on the open page, for the header. Al-Baqara, or "An-Nas · Al-Falaq".
+  const pageSurahs = (() => {
+    if (view !== 'mushaf' || !mushafReady) return null;
+    const range = getPageRange(mushafPage);
+    if (!range) return null;
+    const names: string[] = [];
+    for (let ayah = range.start; ayah <= range.end; ayah++) {
+      const found = getAyahByNumber(ayah);
+      if (found && !names.includes(found.surah.englishName)) names.push(found.surah.englishName);
+    }
+    return names.join(' · ');
+  })();
+
+  // The surah an ayah *opens*, for the bands on a Mushaf page. Null for a verse that merely
+  // continues one, which is what keeps a band from being drawn on every line.
+  const surahOpenedBy = useCallback((ayah: number) => {
+    const found = getAyahByNumber(ayah);
+    return found && found.ayah.numberInSurah === 1 ? found.surah : null;
+  }, []);
+
+  // The open surah as global numbers, which is what bounds the step buttons. Stepping stops at
+  // the surah edge as it always has; only a dragged range may cross into the next surah.
+  const surahFirst = currentSurah?.ayahs[0].number ?? 0;
+  const surahLast = currentSurah?.ayahs[currentSurah.ayahs.length - 1].number ?? 0;
+
+  // "Ayah 5", "Ayah 5–12", and across a surah boundary "2:286 – 3:1". A bare verse number
+  // stops being unambiguous the moment a range leaves the surah it started in.
+  const rangeLabel = (() => {
+    if (!activeRange) return null;
+    const from = getAyahByNumber(activeRange.start);
+    const to = getAyahByNumber(activeRange.end);
+    if (!from || !to) return null;
+    if (from.surah.number !== to.surah.number) {
+      return `${from.surah.number}:${from.ayah.numberInSurah} – ${to.surah.number}:${to.ayah.numberInSurah}`;
+    }
+    return activeCount > 1
+      ? `Ayah ${from.ayah.numberInSurah}–${to.ayah.numberInSurah}`
+      : `Ayah ${from.ayah.numberInSurah}`;
+  })();
 
   // --- Render ---
 
@@ -779,6 +898,9 @@ const App: React.FC = () => {
                   <Type className="w-4 h-4" />
                   Arabic Font
                 </label>
+                <p className="px-2 -mt-1 text-xs text-slate-400">
+                  For the verse list. The Mushaf view brings its own type, one font per page.
+                </p>
                 <div className="grid grid-cols-1 gap-2">
                   {ARABIC_FONTS.map((f) => (
                     <button
@@ -845,7 +967,7 @@ const App: React.FC = () => {
               </h2>
               {totalLearned > 0 && (
                 <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
-                  {totalLearned} of {TOTAL_VERSES} verses learned
+                  {totalLearned} of {TOTAL_AYAHS} verses learned
                 </p>
               )}
             </div>
@@ -859,11 +981,11 @@ const App: React.FC = () => {
               <div className="flex-1 h-0.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500 rounded-full"
-                  style={{ width: `${Math.min(100, (totalLearned / TOTAL_VERSES) * 100)}%` }}
+                  style={{ width: `${Math.min(100, (totalLearned / TOTAL_AYAHS) * 100)}%` }}
                 />
               </div>
               <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums shrink-0">
-                {((totalLearned / TOTAL_VERSES) * 100).toFixed(1)}%
+                {((totalLearned / TOTAL_AYAHS) * 100).toFixed(1)}%
               </span>
             </div>
           )}
@@ -961,7 +1083,15 @@ const App: React.FC = () => {
             <button onClick={() => setShowSidebar(!showSidebar)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-300">
               <List className="w-5 h-5" />
             </button>
-            {currentSurah && (
+            {view === 'mushaf' ? (
+              // A page carries whatever surahs happen to fall on it, which is rarely the one
+              // the sidebar has selected.
+              pageSurahs && (
+                <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+                  {pageSurahs}
+                </h1>
+              )
+            ) : currentSurah && (
               <div>
                 <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
                   {currentSurah.englishName}
@@ -972,6 +1102,13 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => setView(v => (v === 'list' ? 'mushaf' : 'list'))}
+              title={view === 'list' ? 'Mushaf page view' : 'Verse list'}
+              className="p-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-full transition-all"
+            >
+              {view === 'list' ? <BookMarked className="w-5 h-5" /> : <Rows3 className="w-5 h-5" />}
+            </button>
             <button
               onClick={() => setTheme(NEXT_THEME[theme])}
               title={`Theme: ${THEME_LABEL[theme]} (click for ${THEME_LABEL[NEXT_THEME[theme]]})`}
@@ -1000,6 +1137,55 @@ const App: React.FC = () => {
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
             </div>
+          ) : view === 'mushaf' ? (
+            <div className="pb-48">
+              {mushafFailed ? (
+                <p className="text-center py-20 text-sm text-rose-600 dark:text-rose-400">
+                  The Mushaf layout could not be loaded. The page fonts come off a CDN, so this
+                  view needs a connection.
+                </p>
+              ) : !mushafReady ? (
+                <div className="flex items-center justify-center h-64">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600" />
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-center gap-4 mb-6">
+                    <button
+                      onClick={() => setMushafPage(p => Math.min(MUSHAF_PAGES, p + 1))}
+                      disabled={mushafPage >= MUSHAF_PAGES}
+                      title="Next page"
+                      className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full disabled:opacity-30"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <span className="text-sm font-semibold text-slate-600 dark:text-slate-300 tabular-nums">
+                      Page {mushafPage} of {MUSHAF_PAGES}
+                    </span>
+                    {/* Right arrow steps back: the Mushaf is bound on the right, so the earlier
+                        page lies that way. */}
+                    <button
+                      onClick={() => setMushafPage(p => Math.max(1, p - 1))}
+                      disabled={mushafPage <= 1}
+                      title="Previous page"
+                      className="p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full disabled:opacity-30"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <MushafPage
+                    page={mushafPage}
+                    lines={getMushafPage(mushafPage)}
+                    fontReady={pageFontReady}
+                    selection={selection}
+                    currentAyahNumber={currentAyahNumber}
+                    basmala={BASMALA}
+                    surahOf={surahOpenedBy}
+                    {...rowProps}
+                  />
+                </>
+              )}
+            </div>
           ) : currentSurah ? (
             <div className="space-y-12 pb-48">
               {currentSurah.number !== 1 && currentSurah.number !== 9 && (
@@ -1020,17 +1206,16 @@ const App: React.FC = () => {
                 className={`space-y-8 select-none ${isDragging ? 'cursor-ns-resize' : ''}`}
               >
                 {currentSurah.ayahs.map((ayah, idx) => {
-                  const isCurrent = currentAyahIndex === idx;
-                  const isSelected = !!selection && idx >= selection.start && idx <= selection.end;
+                  const isCurrent = currentAyahNumber === ayah.number;
+                  const isSelected = !!selection && ayah.number >= selection.start && ayah.number <= selection.end;
                   return (
                     <AyahRow
                       key={ayah.number}
                       ayah={ayah}
-                      index={idx}
                       isCurrent={isCurrent}
                       isSelected={isSelected}
-                      isRangeStart={!!selection && idx === selection.start}
-                      isRangeEnd={!!selection && idx === selection.end}
+                      isRangeStart={!!selection && ayah.number === selection.start}
+                      isRangeEnd={!!selection && ayah.number === selection.end}
                       isLearned={currentLearned.has(ayah.numberInSurah)}
                       showTranslation={showTranslation && !translationFailed}
                       translation={translations?.[idx] ?? null}
@@ -1168,13 +1353,12 @@ const App: React.FC = () => {
             <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-2xl rounded-2xl p-4 md:p-6 flex flex-col gap-4">
               {/* Practice bar - always visible; without a drag selection it targets the
                   current verse. */}
-              {currentSurah && activeRange && (
+              {activeRange && (
                 <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
                   <div className="flex items-center gap-2">
                     <ListChecks className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
                     <span className="text-sm font-bold text-indigo-900 dark:text-indigo-200">
-                      Ayah {currentSurah.ayahs[activeRange.start].numberInSurah}
-                      {activeCount > 1 && `–${currentSurah.ayahs[activeRange.end].numberInSurah}`}
+                      {rangeLabel}
                     </span>
                     <span className="text-xs text-slate-500 dark:text-slate-400">
                       {activeCount} {activeCount === 1 ? 'verse' : 'verses'}
@@ -1229,8 +1413,8 @@ const App: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => handleActivateAyah(Math.max(0, currentAyahIndex - 1))}
-                    disabled={currentAyahIndex === 0}
+                    onClick={() => handleActivateAyah(Math.max(surahFirst, currentAyahNumber - 1))}
+                    disabled={!currentSurah || currentAyahNumber <= surahFirst}
                     className="p-2.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full disabled:opacity-30 disabled:hover:bg-transparent"
                   >
                     <ChevronLeft className="w-6 h-6" />
@@ -1244,8 +1428,8 @@ const App: React.FC = () => {
                   </button>
 
                   <button
-                    onClick={() => currentSurah && handleActivateAyah(Math.min(currentSurah.ayahs.length - 1, currentAyahIndex + 1))}
-                    disabled={!currentSurah || currentAyahIndex === currentSurah.ayahs.length - 1}
+                    onClick={() => handleActivateAyah(Math.min(surahLast, currentAyahNumber + 1))}
+                    disabled={!currentSurah || currentAyahNumber >= surahLast}
                     className="p-2.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full disabled:opacity-30 disabled:hover:bg-transparent"
                   >
                     <ChevronRight className="w-6 h-6" />
@@ -1260,7 +1444,7 @@ const App: React.FC = () => {
         {currentAyah && (
           <audio
             ref={audioRef}
-            src={getAyahAudioUrl(currentAyah.number, reciter)}
+            src={getAyahAudioUrl(currentAyahNumber, reciter)}
             onEnded={handleAudioEnd}
             onError={handleAudioError}
           />

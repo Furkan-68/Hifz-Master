@@ -5,7 +5,6 @@ import { Ayah } from '../types';
 
 interface AyahRowProps {
   ayah: Ayah;
-  index: number;
   isCurrent: boolean;
   isSelected: boolean;
   isRangeStart: boolean;
@@ -25,7 +24,6 @@ interface AyahRowProps {
  */
 const AyahRow: React.FC<AyahRowProps> = ({
   ayah,
-  index,
   isCurrent,
   isSelected,
   isRangeStart,
@@ -39,8 +37,8 @@ const AyahRow: React.FC<AyahRowProps> = ({
 }) => {
   return (
     <div
-      id={`ayah-${index}`}
-      data-ayah-index={index}
+      id={`ayah-${ayah.number}`}
+      data-ayah-number={ayah.number}
       role="option"
       aria-selected={isSelected}
       onPointerDown={onPointerDown}
