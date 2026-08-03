@@ -35,9 +35,7 @@ import {
   X,
   Minus,
   Plus,
-  ListChecks,
   CheckCircle2,
-  Monitor,
   Sun,
   Moon,
   SlidersHorizontal,
@@ -46,19 +44,36 @@ import {
   Rows3
 } from 'lucide-react';
 
-type Theme = 'system' | 'light' | 'dark';
+type Theme = 'light' | 'dark';
 type View = 'list' | 'mushaf';
 
-// One control, three states - so the button cycles rather than toggles.
-const NEXT_THEME: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
-const THEME_ICON: Record<Theme, typeof Monitor> = { system: Monitor, light: Sun, dark: Moon };
-const THEME_LABEL: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+// One control, two states - so the button toggles rather than cycles.
+const OTHER_THEME: Record<Theme, Theme> = { light: 'dark', dark: 'light' };
+const THEME_ICON: Record<Theme, typeof Sun> = { light: Sun, dark: Moon };
+const THEME_LABEL: Record<Theme, string> = { light: 'Light', dark: 'Dark' };
+
+// The OS preference decides where an unconfigured app starts, but it is resolved to a plain
+// light or dark straight away - that is what lets the button show a sun or a moon instead of
+// a monitor standing in for "whatever the system happens to say". A stored 'system' from the
+// earlier three-way control means the theme was never really chosen, so it lands here too.
+const readTheme = (): Theme => {
+  try {
+    const stored = localStorage.getItem('hifz_theme');
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch {
+    /* fall through to the OS preference */
+  }
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
 
 const MAX_VERSE_REPEAT = 10;
 // The pause is a multiple of how long one pass through the selection takes, so it scales
 // with the material instead of being a fixed number of seconds.
 const MAX_PAUSE_FACTOR = 3;
 const PAUSE_FACTOR_STEP = 0.25;
+// Below a second there is nothing you can do with the silence, so a pause that is switched
+// on at all lasts at least this long - however short the verse or small the factor.
+const MIN_PAUSE_SECONDS = 1;
 
 const MIN_PLAYBACK_RATE = 0.5;
 const MAX_PLAYBACK_RATE = 2;
@@ -122,6 +137,12 @@ const readLearned = (): LearnedMap => {
 
 const clampFactor = (value: number): number =>
   Number.isFinite(value) ? Math.min(MAX_PAUSE_FACTOR, Math.max(0, value)) : 0;
+
+// How long a pause really lasts: the factor times what it measures, but never under the
+// minimum. A factor of 0 stays a true 0 - that is the switch for seamless playback, and the
+// floor must not turn it into a second of silence.
+const pauseSeconds = (basisSeconds: number, factor: number): number =>
+  factor > 0 ? Math.max(basisSeconds * factor, MIN_PAUSE_SECONDS) : 0;
 
 // Reciters differ in tempo, so a factor that leaves you enough time to recite along is
 // a per-reciter preference rather than a global one. Both pauses are stored that way.
@@ -233,9 +254,7 @@ const App: React.FC = () => {
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showPlayback, setShowPlayback] = useState<boolean>(false);
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem('hifz_theme') as Theme) || 'system'
-  );
+  const [theme, setTheme] = useState<Theme>(readTheme);
   const [showTranslation, setShowTranslation] = useState<boolean>(() => {
     const saved = localStorage.getItem('hifz_show_translation');
     return saved !== null ? JSON.parse(saved) : false;
@@ -462,17 +481,11 @@ const App: React.FC = () => {
     localStorage.setItem('hifz_translation', translationEdition);
   }, [reciter, verseRepeat, pauseFactors, versePauseFactors, playbackRate, showTranslation, translationEdition]);
 
-  // Theme: mirror the choice onto <html> so Tailwind's `dark:` variants take effect.
+  // Theme: mirror the choice onto <html> so Tailwind's `dark:` variants take effect. Storage
+  // is deliberately not written here - only pressing the button counts as a choice, so an app
+  // that has never been switched keeps taking the OS preference afresh on every load.
   useEffect(() => {
-    const mq = matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => document.documentElement.classList.toggle(
-      'dark', theme === 'dark' || (theme === 'system' && mq.matches)
-    );
-    apply();
-    localStorage.setItem('hifz_theme', theme);
-    if (theme !== 'system') return; // only while following the system must the OS reach us
-    mq.addEventListener('change', apply);
-    return () => mq.removeEventListener('change', apply);
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
   // Arabic font: same idea, one attribute on <html>. index.html turns it into a font family,
@@ -716,7 +729,7 @@ const App: React.FC = () => {
     // as between two verses - so there is room to say back what you just heard. At a factor
     // of 0 `schedule` runs the callback straight away, which is the seamless behaviour this
     // had before the pause existed.
-    const versePause = heard * versePauseFactor * 1000;
+    const versePause = pauseSeconds(heard, versePauseFactor) * 1000;
 
     playCountRef.current += 1;
     if (playCountRef.current < verseRepeat) {
@@ -729,13 +742,16 @@ const App: React.FC = () => {
       return;
     }
 
-    // End of the block: the pass is complete, so its length sets the pause. Playback always
-    // starts over - there is no "play once and stop" any more.
+    // End of the block: the pass is complete, so its length sets the pause. A block pause
+    // replaces the verse pause here instead of adding to it - the last verse is followed by
+    // one silence, never two. Without a block pause the verse pause still applies, so every
+    // verse ends the same way. Playback always starts over - there is no "play once and
+    // stop" any more.
     const passLength = passDurationRef.current;
     setPassSeconds(passLength);
     passDurationRef.current = 0;
     countedAyahsRef.current.clear();
-    schedule(passLength * pauseFactor * 1000, () => goToAyah(activeRange.start));
+    schedule(pauseFactor > 0 ? pauseSeconds(passLength, pauseFactor) * 1000 : versePause, () => goToAyah(activeRange.start));
   }, [activeRange, verseRepeat, pauseFactor, versePauseFactor, playbackRate, currentAyahNumber, schedule, goToAyah]);
 
   const handleAudioError = useCallback(() => {
@@ -956,28 +972,32 @@ const App: React.FC = () => {
 
       {/* Sidebar - Surah List */}
       <aside className={`bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 transition-all duration-300 flex flex-col ${showSidebar ? 'w-80' : 'w-0 overflow-hidden border-none'}`}>
-        {/* Column so the progress hairline can span the full sidebar width - the title block
-            next to the collapse button is only as wide as its content. */}
-        <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col gap-2 bg-slate-50/50 dark:bg-slate-800/50">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-bold text-lg flex items-center gap-2 text-indigo-900 dark:text-indigo-200">
-                <BookOpen className="w-5 h-5" />
-                Surahs
-              </h2>
-              {totalLearned > 0 && (
-                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
-                  {totalLearned} of {TOTAL_AYAHS} verses learned
-                </p>
-              )}
+        {/* No heading above the list: the search field already names what the column holds.
+            The collapse button and the progress hairline moved in here when it went - they
+            were the only other things the heading row carried. */}
+        <div className="p-4 bg-white dark:bg-slate-900 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search Surah..."
+                className="w-full pl-10 pr-4 py-2 bg-slate-100 dark:bg-slate-800 border-none rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition-all"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
             </div>
-            <button onClick={() => setShowSidebar(false)} className="lg:hidden p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg">
+            <button onClick={() => setShowSidebar(false)} className="lg:hidden shrink-0 p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg">
               <ChevronLeft className="w-5 h-5" />
             </button>
           </div>
 
+          {/* The exact count lives in the tooltip rather than a line of its own. */}
           {totalLearned > 0 && (
-            <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-2"
+              title={`${totalLearned} of ${TOTAL_AYAHS} verses learned`}
+            >
               <div className="flex-1 h-0.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-emerald-500 rounded-full"
@@ -989,19 +1009,6 @@ const App: React.FC = () => {
               </span>
             </div>
           )}
-        </div>
-
-        <div className="p-4 bg-white dark:bg-slate-900">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search Surah..."
-              className="w-full pl-10 pr-4 py-2 bg-slate-100 dark:bg-slate-800 border-none rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 transition-all"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -1110,8 +1117,12 @@ const App: React.FC = () => {
               {view === 'list' ? <BookMarked className="w-5 h-5" /> : <Rows3 className="w-5 h-5" />}
             </button>
             <button
-              onClick={() => setTheme(NEXT_THEME[theme])}
-              title={`Theme: ${THEME_LABEL[theme]} (click for ${THEME_LABEL[NEXT_THEME[theme]]})`}
+              onClick={() => {
+                const next = OTHER_THEME[theme];
+                setTheme(next);
+                localStorage.setItem('hifz_theme', next);
+              }}
+              title={`Theme: ${THEME_LABEL[theme]} (click for ${THEME_LABEL[OTHER_THEME[theme]]})`}
               className="p-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-full transition-all"
             >
               {React.createElement(THEME_ICON[theme], { className: 'w-5 h-5' })}
@@ -1138,7 +1149,7 @@ const App: React.FC = () => {
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
             </div>
           ) : view === 'mushaf' ? (
-            <div className="pb-48">
+            <div className="pb-12">
               {mushafFailed ? (
                 <p className="text-center py-20 text-sm text-rose-600 dark:text-rose-400">
                   The Mushaf layout could not be loaded. The page fonts come off a CDN, so this
@@ -1187,7 +1198,7 @@ const App: React.FC = () => {
               )}
             </div>
           ) : currentSurah ? (
-            <div className="space-y-12 pb-48">
+            <div className="space-y-12 pb-12">
               {currentSurah.number !== 1 && currentSurah.number !== 9 && (
                 <div className="text-center">
                   <div className="font-arabic-display font-arabic-lg text-slate-700 dark:text-slate-200 mb-8">
@@ -1240,9 +1251,10 @@ const App: React.FC = () => {
           <div className="fixed inset-0 z-40" onClick={() => setShowPlayback(false)} />
         )}
 
-        {/* Floating Player Controls */}
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-transparent pointer-events-none z-50">
-          <div className="relative max-w-3xl mx-auto pointer-events-auto">
+        {/* Player controls - the bottom edge of the layout, mirroring the header: a row of
+            its own that the verses are laid out around, not a card floating over them. */}
+        <div className="relative z-50 shrink-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-slate-200 dark:border-slate-700">
+          <div className="relative max-w-3xl mx-auto px-4">
             {/* Playback panel - floats above the bar so the verses stay visible while you
                 adjust something mid-recitation. */}
             {showPlayback && (
@@ -1260,7 +1272,9 @@ const App: React.FC = () => {
                   </button>
                 </div>
 
-                <div className="p-4 space-y-4">
+                {/* Capped and scrollable: the panel opens upwards inside <main>, which clips
+                    its overflow, so on a short window it has to fit rather than run off. */}
+                <div className="p-4 space-y-4 max-h-[min(26rem,60vh)] overflow-y-auto">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Speed</div>
@@ -1295,13 +1309,13 @@ const App: React.FC = () => {
                     <div className="min-w-0">
                       <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Pause after each verse</div>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        {/* Inert only when every verse end is also a block end: one verse,
-                            played once. Then the block pause already covers it. */}
-                        {activeCount < 2 && verseRepeat < 2
-                          ? 'Needs repeats or more than one verse'
+                        {/* Inert only when every verse end is also a block end - one verse,
+                            played once - and a block pause is set to take those ends over. */}
+                        {activeCount < 2 && verseRepeat < 2 && pauseFactor > 0
+                          ? 'The block pause covers it'
                           : verseSeconds > 0
                             ? versePauseFactor > 0
-                              ? `≈ ${Math.round(verseSeconds * versePauseFactor)}s, repeats included`
+                              ? `≈ ${Math.round(pauseSeconds(verseSeconds, versePauseFactor))}s, repeats included`
                               : 'Straight on to the next one'
                             : 'Also between repeats of a verse'}
                       </p>
@@ -1326,8 +1340,10 @@ const App: React.FC = () => {
                             exists once a full pass has been heard. */}
                         {passSeconds > 0
                           ? pauseFactor > 0
-                            ? `≈ ${Math.round(passSeconds * pauseFactor)}s before it starts over`
-                            : 'Straight back to the start'
+                            ? `≈ ${Math.round(pauseSeconds(passSeconds, pauseFactor))}s before it starts over`
+                            : versePauseFactor > 0
+                              ? 'The verse pause applies instead'
+                              : 'Straight back to the start'
                           : 'A multiple of how long one pass takes'}
                       </p>
                     </div>
@@ -1350,35 +1366,7 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200 dark:border-slate-700 shadow-2xl rounded-2xl p-4 md:p-6 flex flex-col gap-4">
-              {/* Practice bar - always visible; without a drag selection it targets the
-                  current verse. */}
-              {activeRange && (
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <ListChecks className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                    <span className="text-sm font-bold text-indigo-900 dark:text-indigo-200">
-                      {rangeLabel}
-                    </span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">
-                      {activeCount} {activeCount === 1 ? 'verse' : 'verses'}
-                      {passSeconds > 0 && ` · ${Math.round(passSeconds)}s`}
-                    </span>
-                  </div>
-
-                  {/* Only a real drag selection can be cleared. */}
-                  {selection && (
-                    <button
-                      onClick={clearSelection}
-                      title="Clear selection"
-                      className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              )}
-
+            <div className="py-3">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-200 dark:shadow-none">
@@ -1392,13 +1380,27 @@ const App: React.FC = () => {
                           ? `Ayah ${currentAyah.numberInSurah} of ${currentSurah?.numberOfAyahs}`
                           : 'Pick an Ayah'}
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    <div className="text-xs text-slate-500 dark:text-slate-400 font-medium truncate max-w-[150px] md:max-w-none">
                       {currentSurah?.englishName || 'No Surah Selected'}
+                      {/* Only a drag selection is worth naming: without one the block is the
+                          single verse the line above already names. */}
+                      {selection && rangeLabel && ` · ${rangeLabel}`}
                     </div>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 md:gap-4">
+                  {/* Only a real drag selection can be cleared. */}
+                  {selection && (
+                    <button
+                      onClick={clearSelection}
+                      title="Clear selection"
+                      className="p-2.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  )}
+
                   <button
                     onClick={() => setShowPlayback(v => !v)}
                     aria-expanded={showPlayback}

@@ -39,10 +39,11 @@ const MushafPage: React.FC<MushafPageProps> = ({
   onPointerDown,
   onClick,
 }) => {
-  // Which blank line carries the band, and which the basmala. A surah is introduced by the
-  // blank lines directly above its opening line - usually two, sometimes one, occasionally
-  // three - so the gap is read backwards from the line that starts the surah.
-  const bands = new Map<number, { surah: Surah; withBasmala: boolean }>();
+  // Which blank line carries the basmala. A surah is introduced by the blank lines directly
+  // above its opening line - usually two, sometimes one, occasionally three - so the gap is
+  // read backwards from the line that starts the surah. The basmala takes the last of those
+  // blank lines; any further one above it stays empty. The surah name is not printed: the
+  // header already names the surahs a page holds.
   const basmalas = new Set<number>();
 
   lines.forEach((line, i) => {
@@ -52,19 +53,13 @@ const MushafPage: React.FC<MushafPageProps> = ({
 
     let gap = 0;
     while (i - gap - 1 >= 0 && lines[i - gap - 1].type === 'blank') gap++;
-    // Two surahs in the whole Mushaf get no blank line of their own and so no band. Drawing
-    // one anyway would push the page a line out of true, which is the thing to avoid here.
+    // Two surahs in the whole Mushaf get no blank line of their own. Borrowing a line from
+    // the text would push the page out of true, which is the thing to avoid here.
     if (gap === 0) return;
 
     // At-Tawba has no basmala, and Al-Fatiha's is its first verse.
-    const needsBasmala = surah.number !== 1 && surah.number !== 9;
-    if (gap >= 2 && needsBasmala) {
-      bands.set(i - 2, { surah, withBasmala: false });
-      basmalas.add(i - 1);
-    } else {
-      // A single blank line has to carry both; the band gets the basmala tucked underneath.
-      bands.set(i - 1, { surah, withBasmala: needsBasmala });
-    }
+    if (surah.number === 1 || surah.number === 9) return;
+    basmalas.add(i - 1);
   });
 
   const isSelected = (ayah: number) => !!selection && ayah >= selection.start && ayah <= selection.end;
@@ -116,25 +111,6 @@ const MushafPage: React.FC<MushafPageProps> = ({
         }`}
       >
         {lines.map((line, i) => {
-          const band = bands.get(i);
-          if (band) {
-            return (
-              <div key={i} style={{ height: `${lineHeight}cqw` }}
-                className="flex flex-col items-center justify-center">
-                <div className="w-full flex items-center justify-center gap-3 rounded-md border-y-2 border-slate-300 dark:border-slate-600 bg-slate-100/70 dark:bg-slate-800/60 py-[0.4cqw]">
-                  <span className="font-quran text-[3cqw] leading-none text-slate-700 dark:text-slate-200" dir="rtl">
-                    {band.surah.name}
-                  </span>
-                </div>
-                {band.withBasmala && (
-                  <span className="font-arabic-display text-[2.6cqw] leading-none text-slate-700 dark:text-slate-200 pt-[0.6cqw]" dir="rtl">
-                    {basmala}
-                  </span>
-                )}
-              </div>
-            );
-          }
-
           if (basmalas.has(i)) {
             return (
               <div key={i} style={{ height: `${lineHeight}cqw` }}
