@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { Brackets, CheckCircle2, ListEnd, ListStart } from 'lucide-react';
 import { Ayah } from '../types';
 
 interface AyahRowProps {
@@ -10,11 +10,16 @@ interface AyahRowProps {
   isRangeStart: boolean;
   isRangeEnd: boolean;
   isLearned: boolean;
+  /** This verse opened a block and is waiting for the click that closes it. */
+  isBlockAnchor: boolean;
+  /** Some other verse is waiting - a click here closes the block against it. */
+  isBlockPending: boolean;
   showTranslation: boolean;
   translation: string | null;
   onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
   onClick: (e: React.MouseEvent<HTMLElement>) => void;
   onToggleLearned: (verseNumber: number) => void;
+  onPickBlockEdge: (ayahNumber: number) => void;
 }
 
 /**
@@ -29,11 +34,14 @@ const AyahRow: React.FC<AyahRowProps> = ({
   isRangeStart,
   isRangeEnd,
   isLearned,
+  isBlockAnchor,
+  isBlockPending,
   showTranslation,
   translation,
   onPointerDown,
   onClick,
   onToggleLearned,
+  onPickBlockEdge,
 }) => {
   return (
     <div
@@ -78,21 +86,51 @@ const AyahRow: React.FC<AyahRowProps> = ({
             }`}>
               {ayah.numberInSurah}
             </div>
-            <button
-              // Without stopping both, a click here would start the drag gesture and jump
-              // the playback cursor to this verse.
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); onToggleLearned(ayah.numberInSurah); }}
-              aria-pressed={isLearned}
-              title={isLearned ? 'Mark as not learned' : 'Mark as learned'}
-              className={`rounded-full transition-all ${
-                isLearned
-                  ? 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300'
-                  : 'text-slate-300 dark:text-slate-500 opacity-0 group-hover:opacity-100 hover:text-emerald-500'
-              }`}
-            >
-              <CheckCircle2 className="w-5 h-5" />
-            </button>
+            {/* Both buttons stop pointerdown and click: without that, pressing one would
+                start the drag gesture and jump the playback cursor to this verse. */}
+            <div className="flex items-center gap-1">
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onToggleLearned(ayah.numberInSurah); }}
+                aria-pressed={isLearned}
+                title={isLearned ? 'Mark as not learned' : 'Mark as learned'}
+                className={`rounded-full transition-all ${
+                  isLearned
+                    ? 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300'
+                    : 'text-slate-300 dark:text-slate-500 opacity-0 group-hover:opacity-100 hover:text-emerald-500'
+                }`}
+              >
+                <CheckCircle2 className="w-5 h-5" />
+              </button>
+
+              {/* Picking a block one edge per click - the way to a range that needs no drag
+                  and no keyboard, so it works the same on a phone as on a desktop. */}
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onPickBlockEdge(ayah.number); }}
+                aria-pressed={isBlockAnchor}
+                title={
+                  isBlockAnchor
+                    ? 'Block opens here - click again to drop it'
+                    : isBlockPending
+                      ? 'Close the block here'
+                      : 'Open a block here'
+                }
+                className={`rounded-full transition-colors ${
+                  isBlockAnchor
+                    ? 'text-indigo-600 dark:text-indigo-400'
+                    : isBlockPending
+                      ? 'text-indigo-400 dark:text-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-300'
+                      : 'text-slate-300 dark:text-slate-600 hover:text-indigo-500'
+                }`}
+              >
+                {isBlockAnchor
+                  ? <ListStart className="w-5 h-5" />
+                  : isBlockPending
+                    ? <ListEnd className="w-5 h-5" />
+                    : <Brackets className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
           <div
             className={`font-arabic-display text-right text-slate-800 dark:text-slate-100 transition-colors w-full ${

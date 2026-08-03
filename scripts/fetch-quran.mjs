@@ -15,7 +15,11 @@ import { fileURLToPath } from 'node:url';
 
 const BASE_URL = 'https://api.alquran.cloud/v1';
 const ARABIC_EDITION = 'quran-uthmani';
-const TRANSLATIONS = ['en.itani', 'en.sahih', 'en.pickthall', 'en.yusufali', 'en.asad'];
+const TRANSLATIONS = [
+  'en.itani', 'en.sahih', 'en.pickthall', 'en.yusufali', 'en.asad',
+  'tr.diyanet',
+  'de.bubenheim',
+];
 
 const SURAH_COUNT = 114;
 const TOTAL_AYAHS = 6236;
@@ -155,7 +159,8 @@ written.push(['surahs.json', await write('surahs.json', `${JSON.stringify(meta, 
 written.push(['quran.json', await write('quran.json', formatMatrix(arabic))]);
 
 for (const edition of TRANSLATIONS) {
-  // Translations carry no basmala of their own - verified against all five editions.
+  // Translations carry no basmala of their own - verified against all seven editions. Only
+  // Al-Fatiha 1:1 renders it, which is right: there it is a verse.
   const texts = toTextMatrix(await fetchEdition(edition), { stripBasmala: false });
   checkShape(edition, texts, meta);
   written.push([

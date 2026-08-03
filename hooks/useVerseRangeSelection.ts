@@ -54,7 +54,45 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onAc
   const edgeRafRef = useRef<number | null>(null);
   const moveRafRef = useRef<number | null>(null);
 
-  const clearSelection = useCallback(() => setSelection(null), []);
+  // --- Picking a block by button, one edge per click ---
+
+  // The verse whose button opened a block and is waiting for its second click. Held in a ref
+  // as well so the handler can stay dependency-free and the rows memoized.
+  const [blockAnchor, setBlockAnchor] = useState<number | null>(null);
+  const blockAnchorRef = useRef<number | null>(null);
+
+  const dropAnchor = useCallback(() => {
+    blockAnchorRef.current = null;
+    setBlockAnchor(null);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelection(null);
+    dropAnchor();
+  }, [dropAnchor]);
+
+  const pickBlockEdge = useCallback((number: number) => {
+    const anchor = blockAnchorRef.current;
+    if (anchor === null) {
+      blockAnchorRef.current = number;
+      setBlockAnchor(number);
+      setSelection(normalizeRange(number, number));
+      return;
+    }
+    blockAnchorRef.current = null;
+    setBlockAnchor(null);
+    // Clicking the open edge a second time takes the block back instead of selecting the one
+    // verse - that is the way out when the button was hit by mistake.
+    setSelection(anchor === number ? null : normalizeRange(anchor, number));
+  }, []);
+
+  // A selection set from outside - a restored block, say - ends whatever the button had
+  // half-picked; leaving the anchor behind would make the next click close a block against
+  // a verse chosen long ago.
+  const replaceSelection = useCallback((range: AyahRange | null) => {
+    dropAnchor();
+    setSelection(range);
+  }, [dropAnchor]);
 
   // --- Hit testing ---
 
@@ -106,6 +144,7 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onAc
   const startDrag = useCallback((number: number) => {
     isDraggingRef.current = true;
     didDragRef.current = true;
+    dropAnchor(); // a drag defines the whole block on its own
     anchorRef.current = number;
     lastNumberRef.current = number;
     setIsDragging(true);
@@ -113,7 +152,7 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onAc
     if (edgeRafRef.current === null) {
       edgeRafRef.current = requestAnimationFrame(edgeScrollStep);
     }
-  }, [edgeScrollStep]);
+  }, [edgeScrollStep, dropAnchor]);
 
   const endPress = useCallback(() => {
     if (longPressRef.current !== null) {
@@ -210,6 +249,8 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onAc
     if (!Number.isFinite(number)) return;
 
     if (e.shiftKey) {
+      blockAnchorRef.current = null;
+      setBlockAnchor(null);
       setSelection(normalizeRange(currentNumberRef.current, number));
       return;
     }
@@ -229,9 +270,11 @@ export const useVerseRangeSelection = ({ scrollContainerRef, currentNumber, onAc
 
   return {
     selection,
-    setSelection,
+    setSelection: replaceSelection,
     clearSelection,
     isDragging,
+    blockAnchor,
+    pickBlockEdge,
     containerProps: {
       onPointerMove: handleContainerPointerMove,
       onPointerUp: handleContainerPointerUp,

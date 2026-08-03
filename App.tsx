@@ -76,18 +76,30 @@ const PAUSE_FACTOR_STEP = 0.25;
 const MIN_PAUSE_SECONDS = 1;
 
 const MIN_PLAYBACK_RATE = 0.5;
-const MAX_PLAYBACK_RATE = 2;
-const PLAYBACK_RATE_STEP = 0.25;
+const MAX_PLAYBACK_RATE = 4;
+
+// Fine steps where the precision is worth having - slowing a verse down far enough to recite
+// along with it - and coarser ones past normal speed, where the point is to get through the
+// material rather than to hit an exact tempo. That keeps 4× eight clicks away instead of
+// twelve. The comparison differs by direction on purpose: coming down from 2.5 the step that
+// got you there is the step that takes you back, so 2 is reached from either side.
+const PLAYBACK_RATE_COARSE_ABOVE = 2;
+const playbackRateStep = (rate: number, direction: 1 | -1): number =>
+  (direction > 0 ? rate >= PLAYBACK_RATE_COARSE_ABOVE : rate > PLAYBACK_RATE_COARSE_ABOVE)
+    ? 0.5
+    : 0.25;
 
 // Edition ids, matching the files in public/data/translations. Adding one here means adding
 // it to TRANSLATIONS in scripts/fetch-quran.mjs and re-running `npm run fetch:quran`.
 // Note that M.A.S. Abdel Haleem is only on quran.com, so alquran.cloud cannot supply it.
 const TRANSLATIONS = [
-  { id: 'en.itani', name: "Clear Qur'an", author: 'Talal Itani' },
-  { id: 'en.sahih', name: 'Saheeh International', author: 'Saheeh International' },
-  { id: 'en.pickthall', name: 'Pickthall', author: 'Marmaduke Pickthall' },
-  { id: 'en.yusufali', name: 'Yusuf Ali', author: 'Abdullah Yusuf Ali' },
-  { id: 'en.asad', name: 'The Message of the Qur’an', author: 'Muhammad Asad' }
+  { id: 'en.itani', lang: 'English', name: "Clear Qur'an", author: 'Talal Itani' },
+  { id: 'en.sahih', lang: 'English', name: 'Saheeh International', author: 'Saheeh International' },
+  { id: 'en.pickthall', lang: 'English', name: 'Pickthall', author: 'Marmaduke Pickthall' },
+  { id: 'en.yusufali', lang: 'English', name: 'Yusuf Ali', author: 'Abdullah Yusuf Ali' },
+  { id: 'en.asad', lang: 'English', name: 'The Message of the Qur’an', author: 'Muhammad Asad' },
+  { id: 'tr.diyanet', lang: 'Türkçe', name: 'Diyanet İşleri', author: 'Diyanet İşleri Başkanlığı' },
+  { id: 'de.bubenheim', lang: 'Deutsch', name: 'Bubenheim & Elyas', author: 'Frank Bubenheim und Nadeem Elyas' }
 ];
 
 // The ids match the [data-arabic-font] rules in index.html, which hold the actual font families
@@ -442,6 +454,8 @@ const App: React.FC = () => {
     setSelection,
     clearSelection,
     isDragging,
+    blockAnchor,
+    pickBlockEdge,
     containerProps,
     rowProps,
   } = useVerseRangeSelection({
@@ -795,6 +809,62 @@ const App: React.FC = () => {
   const surahFirst = currentSurah?.ayahs[0].number ?? 0;
   const surahLast = currentSurah?.ayahs[currentSurah.ayahs.length - 1].number ?? 0;
 
+  // --- Media session ---
+  //
+  // Without one, a backgrounded tab is just a page that happens to make noise, and Android
+  // stops it the moment the browser goes away or the screen locks. Registering a session
+  // declares the playback as media: it earns the notification and the lock screen controls,
+  // and with them the right to keep running while the browser is not in front.
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    if (!currentAyah || !currentSurah) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: `Ayah ${currentAyah.numberInSurah} · ${currentSurah.englishName}`,
+      artist: reciterName,
+      album: currentSurah.name,
+    });
+  }, [currentAyah, currentSurah, reciterName]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => safePlay()],
+      ['pause', () => stopPlayback()],
+      ['previoustrack', () => handleActivateAyah(Math.max(surahFirst, currentAyahNumber - 1))],
+      ['nexttrack', () => handleActivateAyah(Math.min(surahLast, currentAyahNumber + 1))],
+    ];
+    for (const [action, handler] of actions) {
+      // Not every action exists in every browser, and an unknown one throws rather than
+      // being ignored - so one missing handler must not cost us the rest.
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        /* this browser does not offer the action */
+      }
+    }
+    return () => {
+      for (const [action] of actions) {
+        try {
+          navigator.mediaSession.setActionHandler(action, null);
+        } catch {
+          /* nothing was registered in the first place */
+        }
+      }
+    };
+  }, [safePlay, stopPlayback, handleActivateAyah, currentAyahNumber, surahFirst, surahLast]);
+
+  // A scheduled pause still counts as playing here. The block is not finished, and letting
+  // the state drop to "paused" during the silence invites Android to tear the session down
+  // mid-block - exactly when nothing is playing to keep it alive.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
   // "Ayah 5", "Ayah 5–12", and across a surah boundary "2:286 – 3:1". A bare verse number
   // stops being unambiguous the moment a range leaves the surah it started in.
   const rangeLabel = (() => {
@@ -870,7 +940,7 @@ const App: React.FC = () => {
                 <div className="flex items-center justify-between p-2">
                   <div className="flex flex-col pr-4">
                     <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">Show Translation</span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">Displays an English translation under each verse</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">Displays a translation under each verse</span>
                   </div>
                   <button
                     onClick={() => setShowTranslation(!showTranslation)}
@@ -892,11 +962,16 @@ const App: React.FC = () => {
                             : 'border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300'
                         }`}
                       >
-                        <span className="flex flex-col">
+                        <span className="flex flex-col min-w-0">
                           <span className="font-medium">{t.name}</span>
                           <span className="text-xs text-slate-400">{t.author}</span>
                         </span>
-                        {translationEdition === t.id && <CheckCircle2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0" />}
+                        {/* The list holds more than one language now, so each entry has to say
+                            which one it is - the translator's name alone does not. */}
+                        <span className="flex items-center gap-3 shrink-0 pl-3">
+                          <span className="text-[10px] uppercase tracking-wider text-slate-400">{t.lang}</span>
+                          {translationEdition === t.id && <CheckCircle2 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
+                        </span>
                       </button>
                     ))}
                     {translationFailed && (
@@ -1039,14 +1114,7 @@ const App: React.FC = () => {
                     }`}>
                       {surah.number}
                     </span>
-                    <div className="min-w-0">
-                      <div className="font-semibold text-sm truncate">{surah.englishName}</div>
-                      <div className={`text-[10px] uppercase tracking-wider truncate ${
-                        isActive ? 'text-indigo-100' : 'text-slate-400'
-                      }`}>
-                        {surah.revelationType} • {learnedCount > 0 ? `${learnedCount}/` : ''}{surah.numberOfAyahs}
-                      </div>
-                    </div>
+                    <div className="min-w-0 font-semibold text-sm truncate">{surah.englishName}</div>
                   </div>
                   <div className="font-quran text-lg shrink-0">{surah.name}</div>
                 </button>
@@ -1228,9 +1296,12 @@ const App: React.FC = () => {
                       isRangeStart={!!selection && ayah.number === selection.start}
                       isRangeEnd={!!selection && ayah.number === selection.end}
                       isLearned={currentLearned.has(ayah.numberInSurah)}
+                      isBlockAnchor={blockAnchor === ayah.number}
+                      isBlockPending={blockAnchor !== null && blockAnchor !== ayah.number}
                       showTranslation={showTranslation && !translationFailed}
                       translation={translations?.[idx] ?? null}
                       onToggleLearned={handleToggleLearned}
+                      onPickBlockEdge={pickBlockEdge}
                       {...rowProps}
                     />
                   );
@@ -1285,8 +1356,8 @@ const App: React.FC = () => {
                       value={`${playbackRate}×`}
                       canDecrease={playbackRate > MIN_PLAYBACK_RATE}
                       canIncrease={playbackRate < MAX_PLAYBACK_RATE}
-                      onDecrease={() => setPlaybackRate(v => Math.max(MIN_PLAYBACK_RATE, Math.round((v - PLAYBACK_RATE_STEP) * 100) / 100))}
-                      onIncrease={() => setPlaybackRate(v => Math.min(MAX_PLAYBACK_RATE, Math.round((v + PLAYBACK_RATE_STEP) * 100) / 100))}
+                      onDecrease={() => setPlaybackRate(v => Math.max(MIN_PLAYBACK_RATE, Math.round((v - playbackRateStep(v, -1)) * 100) / 100))}
+                      onIncrease={() => setPlaybackRate(v => Math.min(MAX_PLAYBACK_RATE, Math.round((v + playbackRateStep(v, 1)) * 100) / 100))}
                     />
                   </div>
 
