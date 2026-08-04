@@ -8,12 +8,14 @@
     "build": "vite build",
     "preview": "vite preview",
     "fetch:quran": "node scripts/fetch-quran.mjs",
-    "fetch:mushaf": "node scripts/fetch-mushaf.mjs"
+    "fetch:mushaf": "node scripts/fetch-mushaf.mjs",
+    "check:review": "node scripts/check-review.mjs"
   },
   "dependencies": {
-    "react": "^19.2.4",
     "lucide-react": "^0.574.0",
-    "react-dom": "^19.2.4"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "ts-fsrs": "^5.4.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

@@ -11,7 +11,6 @@ import {
   TOTAL_AYAHS,
 } from './services/quranApi';
 import {
-  loadMushaf,
   getMushafPage,
   getPageOfAyah,
   getPageRange,
@@ -22,6 +21,13 @@ import {
 import AyahRow from './components/AyahRow';
 import MushafPage from './components/MushafPage';
 import { useVerseRangeSelection } from './hooks/useVerseRangeSelection';
+import { useMushafLayout } from './hooks/useMushafLayout';
+import { useReview } from './hooks/useReview';
+import ReviewDashboard from './components/ReviewDashboard';
+import ReviewSession from './components/ReviewSession';
+import type { Grade } from 'ts-fsrs';
+// AyahRange comes from types.ts and is the same shape, so it serves as the review range too.
+import { UnitRef, newCard, proposeAdoption, suggestNextPage } from './services/review';
 import {
   Play,
   Pause,
@@ -41,11 +47,15 @@ import {
   SlidersHorizontal,
   Type,
   BookMarked,
+  BookCheck,
   Rows3
 } from 'lucide-react';
 
 type Theme = 'light' | 'dark';
-type View = 'list' | 'mushaf';
+// 'review' is not a reading view and is deliberately not persisted: a reload belongs in the
+// text, not in a dashboard.
+type View = 'list' | 'mushaf' | 'review';
+type ReadingView = Extract<View, 'list' | 'mushaf'>;
 
 // One control, two states - so the button toggles rather than cycles.
 const OTHER_THEME: Record<Theme, Theme> = { light: 'dark', dark: 'light' };
@@ -282,15 +292,21 @@ const App: React.FC = () => {
     () => (localStorage.getItem('hifz_view') === 'mushaf' ? 'mushaf' : 'list')
   );
   const [mushafPage, setMushafPage] = useState<number>(1);
-  // The layout and each page's font arrive over time, so the page tracks its own readiness.
-  const [mushafReady, setMushafReady] = useState<boolean>(false);
+  // The layout is shared by every view that draws pages; each page's font is not, so it stays
+  // here beside the page this view happens to be showing.
+  // The review view needs it too: page names in the dashboard and every drill are drawn from it.
+  const { ready: mushafReady, failed: mushafFailed } = useMushafLayout(
+    view === 'mushaf' || view === 'review'
+  );
   const [pageFontReady, setPageFontReady] = useState<boolean>(false);
-  const [mushafFailed, setMushafFailed] = useState<boolean>(false);
   // Kept parallel to currentSurah.ayahs rather than merged into them, so the fetched API
   // objects stay untouched and caching per edition stays trivial.
   const [translations, setTranslations] = useState<string[] | null>(null);
   const [translationFailed, setTranslationFailed] = useState<boolean>(false);
   const [learned, setLearned] = useState<LearnedMap>(readLearned);
+  // The open drill. Transient on purpose and never persisted: a half-finished drill restored
+  // three days later would be a claim about what was recited.
+  const [drill, setDrill] = useState<{ unit: UnitRef; mode: 'review' | 'practice' } | null>(null);
 
   // Both pause factors belong to the reciter you are listening to.
   const pauseFactor = clampFactor(pauseFactors[reciter] ?? 0);
@@ -331,6 +347,48 @@ const App: React.FC = () => {
   currentSurahRef.current = currentSurah;
   const learnedRef = useRef<LearnedMap>(learned);
   learnedRef.current = learned;
+  // Where the review button goes back to. Not state: nothing renders differently for it.
+  const lastReadingViewRef = useRef<ReadingView>(view === 'review' ? 'list' : view);
+
+  // --- Review ---
+
+  const review = useReview();
+
+  /**
+   * Which ayahs a unit covers. The two kinds are not equally cheap: a surah's range is in
+   * memory from startup, a page's needs the 697 KB layout - so a page is unknowable until
+   * `mushafReady`, and every surface that uses this has to survive the null.
+   */
+  const rangeOf = useCallback(
+    (unit: UnitRef): AyahRange | null => {
+      if (unit.kind === 'surah') {
+        try {
+          const detail = getSurahDetail(unit.ref);
+          return { start: detail.ayahs[0].number, end: detail.ayahs[detail.ayahs.length - 1].number };
+        } catch {
+          return null; // the text has not loaded yet
+        }
+      }
+      return mushafReady ? getPageRange(unit.ref) : null;
+    },
+    [mushafReady]
+  );
+
+  /** "Al-Anfal" for a surah; "Page 41" for a page, gaining "· Al-Anfal" once the layout lands. */
+  const unitLabel = useCallback(
+    (unit: UnitRef): string => {
+      if (unit.kind === 'surah') return getAyahByNumber(rangeOf(unit)?.start ?? 0)?.surah.englishName ?? `Surah ${unit.ref}`;
+      const range = rangeOf(unit);
+      if (!range) return `Page ${unit.ref}`;
+      const names: string[] = [];
+      for (let ayah = range.start; ayah <= range.end; ayah++) {
+        const found = getAyahByNumber(ayah);
+        if (found && !names.includes(found.surah.englishName)) names.push(found.surah.englishName);
+      }
+      return names.length ? `Page ${unit.ref} · ${names.join(' · ')}` : `Page ${unit.ref}`;
+    },
+    [rangeOf]
+  );
 
   // --- Progress ---
 
@@ -368,6 +426,26 @@ const App: React.FC = () => {
     const complete = (learnedRef.current[surahNumber] ?? []).length >= ayahCount;
     const all = Array.from({ length: ayahCount }, (_, i) => i + 1);
     setVersesLearned(surahNumber, all, !complete);
+  }, [setVersesLearned]);
+
+  /**
+   * The one-way bridge from the rotation to the verse register: taking a unit up marks its
+   * verses learned. It does not run the other way - removing a unit from the rotation is a
+   * decision about scheduling and must not erase a record of what is known.
+   *
+   * Grouped per surah because `setVersesLearned` works within one, and a Mushaf page crosses a
+   * surah boundary often enough that this is the normal case rather than the exception.
+   */
+  const markRangeLearned = useCallback((range: AyahRange) => {
+    const bySurah = new Map<number, number[]>();
+    for (let ayah = range.start; ayah <= range.end; ayah++) {
+      const found = getAyahByNumber(ayah);
+      if (!found) continue;
+      const list = bySurah.get(found.surah.number);
+      if (list) list.push(found.ayah.numberInSurah);
+      else bySurah.set(found.surah.number, [found.ayah.numberInSurah]);
+    }
+    bySurah.forEach((verses, surahNumber) => setVersesLearned(surahNumber, verses, true));
   }, [setVersesLearned]);
 
   // --- Playback primitives ---
@@ -424,6 +502,18 @@ const App: React.FC = () => {
     audioRef.current?.pause();
     setIsPlaying(false);
   }, [clearPauseTimer]);
+
+  // Opening a drill stops playback: a loop still running would be reciting the very thing the
+  // drill is asking you to remember.
+  const startReview = useCallback((unit: UnitRef) => {
+    stopPlayback();
+    setDrill({ unit, mode: 'review' });
+  }, [stopPlayback]);
+
+  const startPractice = useCallback((unit: UnitRef) => {
+    stopPlayback();
+    setDrill({ unit, mode: 'practice' });
+  }, [stopPlayback]);
 
   // Moves the playback cursor. When the target is the verse already loaded, changing state
   // would be a no-op and the source effect would never fire - so restart the element here.
@@ -509,25 +599,18 @@ const App: React.FC = () => {
     localStorage.setItem('hifz_arabic_font', arabicFont);
   }, [arabicFont]);
 
-  // The Mushaf layout is 697 KB that the list view never needs, so it waits until the view is
-  // opened for the first time rather than joining the startup load.
   useEffect(() => {
+    if (view === 'review') return; // see the View type: only a reading view is restored
     localStorage.setItem('hifz_view', view);
-    if (view !== 'mushaf' || mushafReady) return;
-    let cancelled = false;
-    loadMushaf()
-      .then(() => {
-        if (cancelled) return;
-        setMushafReady(true);
-        // Open on the page holding whatever is being practised, not on page 1.
-        if (currentAyahNumber) setMushafPage(getPageOfAyah(currentAyahNumber));
-      })
-      .catch(err => {
-        console.error('Failed to load the Mushaf layout', err);
-        if (!cancelled) setMushafFailed(true);
-      });
-    return () => { cancelled = true; };
-  }, [view, mushafReady, currentAyahNumber]);
+    lastReadingViewRef.current = view;
+  }, [view]);
+
+  // Open on the page holding whatever is being practised, not on page 1. View state rather than
+  // layout state, so it sits here and not in the hook: it fires once, when the layout lands.
+  useEffect(() => {
+    if (!mushafReady || !currentAyahNumberRef.current) return;
+    setMushafPage(getPageOfAyah(currentAyahNumberRef.current));
+  }, [mushafReady]);
 
   // One page's font, plus its neighbours in the background so turning does not stall.
   useEffect(() => {
@@ -659,16 +742,17 @@ const App: React.FC = () => {
     };
   }, [currentAyahNumber, reciter, selection]);
 
-  // Escape closes whatever is open on top, and only then clears the range
+  // Escape closes whatever is open on top, and only then clears the range. The drill handles
+  // its own Escape - it is the only one that knows how much of the pass would be thrown away.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || showSettings) return;
+      if (e.key !== 'Escape' || showSettings || drill) return;
       if (showPlayback) setShowPlayback(false);
       else clearSelection();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, showSettings, showPlayback]);
+  }, [clearSelection, showSettings, showPlayback, drill]);
 
   // Never leave a pause timer running behind us
   useEffect(() => () => {
@@ -797,12 +881,60 @@ const App: React.FC = () => {
     return names.join(' · ');
   })();
 
+  // The page the new-unit card offers. Its fallback is the page under the cursor, so a first
+  // unit starts where the reader already is rather than at page 1.
+  const suggestedPage = useMemo(
+    () => suggestNextPage(review.state, mushafReady && currentAyahNumber ? getPageOfAyah(currentAyahNumber) : mushafPage),
+    [review.state, mushafReady, currentAyahNumber, mushafPage]
+  );
+
+  // What the migration card offers, computed only while it could still be shown. Needs the
+  // layout to judge pages; without it the proposal is surahs only, which is still worth having.
+  const adoptionProposal = useMemo(() => {
+    if (!review.untouched || view !== 'review' || totalLearned === 0) return null;
+    const isLearned = (globalAyah: number) => {
+      const found = getAyahByNumber(globalAyah);
+      return !!found && (learned[found.surah.number] ?? []).includes(found.ayah.numberInSurah);
+    };
+    return proposeAdoption(isLearned, rangeOf);
+  }, [review.untouched, view, totalLearned, learned, rangeOf]);
+
   // The surah an ayah *opens*, for the bands on a Mushaf page. Null for a verse that merely
   // continues one, which is what keeps a band from being drawn on every line.
   const surahOpenedBy = useCallback((ayah: number) => {
     const found = getAyahByNumber(ayah);
     return found && found.ayah.numberInSurah === 1 ? found.surah : null;
   }, []);
+
+  const surahNameOf = useCallback(
+    (ayah: number) => getAyahByNumber(ayah)?.surah.englishName ?? '',
+    []
+  );
+
+  // The drill's ayahs, or null while the layout that a page unit needs is still loading.
+  const drillRange = useMemo(() => (drill ? rangeOf(drill.unit) : null), [drill, rangeOf]);
+
+  // The card whose intervals the grading bar quotes. A unit being taken up for the first time
+  // has none yet, and an empty card is exactly what it is about to be graded from - so the
+  // first drill, where seeing the price matters most, quotes real numbers rather than none.
+  const drillCard = useMemo(
+    () => (drill ? review.find(drill.unit)?.card ?? newCard(new Date()) : null),
+    [drill, review]
+  );
+
+  /**
+   * The end of a graded pass. A unit that was not in the rotation joins it here and is graded
+   * in the same breath, which is what makes the first drill the thing that sets the schedule.
+   */
+  const handleGrade = useCallback((rating: Grade) => {
+    if (!drill || !drillRange) return;
+    if (!review.find(drill.unit)) {
+      review.add(drill.unit);
+      markRangeLearned(drillRange);
+    }
+    review.grade(drill.unit, rating);
+    setDrill(null);
+  }, [drill, drillRange, review, markRangeLearned]);
 
   // The open surah as global numbers, which is what bounds the step buttons. Stepping stops at
   // the surah edge as it always has; only a dragged range may cross into the next surah.
@@ -884,6 +1016,47 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden font-sans">
+      {/* The drill. A sibling of the settings modal rather than a child of <main>, so no
+          ancestor's overflow or backdrop-filter has to be reasoned about; z-90 puts it over the
+          player bar (z-50) and under the settings modal (z-100). */}
+      {drill && !(mushafReady && drillRange) && (
+        // Every drill draws printed pages, so it waits for the layout even when the unit is a
+        // surah and its range was known all along.
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+          {mushafFailed ? (
+            <div className="px-6 text-center">
+              <p className="text-sm text-rose-600 dark:text-rose-400">
+                The Mushaf layout could not be loaded. The drill sets the printed page, so it
+                needs a connection.
+              </p>
+              <button
+                onClick={() => setDrill(null)}
+                className="mt-4 px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+          ) : (
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600" />
+          )}
+        </div>
+      )}
+      {drill && mushafReady && drillRange && (
+        <ReviewSession
+          key={`${drill.unit.kind}:${drill.unit.ref}`}
+          unit={drill.unit}
+          range={drillRange}
+          mode={drill.mode}
+          card={drillCard}
+          title={unitLabel(drill.unit)}
+          basmala={BASMALA}
+          surahOf={surahOpenedBy}
+          surahNameOf={surahNameOf}
+          onGrade={handleGrade}
+          onClose={() => setDrill(null)}
+        />
+      )}
+
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -1119,6 +1292,37 @@ const App: React.FC = () => {
                   <div className="font-quran text-lg shrink-0">{surah.name}</div>
                 </button>
 
+                {/* Surahs join the rotation from here - this is where you are standing when
+                    you think of one. A locked gate simply draws no button: the gate lives in
+                    the review view and should not be restated in 114 rows. */}
+                {(() => {
+                  const unit: UnitRef = { kind: 'surah', ref: surah.number };
+                  const inRotation = !!review.find(unit);
+                  const due = review.isDueNow(unit);
+                  if (!inRotation && !review.gate.open) return null;
+                  return (
+                    <button
+                      onClick={() => (inRotation && !due ? startPractice(unit) : startReview(unit))}
+                      title={
+                        !inRotation
+                          ? `Drill ${surah.englishName} and add it to the review rotation`
+                          : due
+                            ? `${surah.englishName} is due for review`
+                            : `Practise ${surah.englishName} without changing its schedule`
+                      }
+                      className={`shrink-0 pl-2 pr-1 flex items-center transition-colors ${
+                        due
+                          ? (isActive ? 'text-white' : 'text-indigo-600 dark:text-indigo-400')
+                          : inRotation
+                            ? (isActive ? 'text-white/70' : 'text-indigo-400/70')
+                            : (isActive ? 'text-white/40 hover:text-white' : 'text-slate-300 dark:text-slate-500 hover:text-indigo-500')
+                      }`}
+                    >
+                      <BookCheck className="w-5 h-5" />
+                    </button>
+                  );
+                })()}
+
                 <button
                   onClick={() => toggleSurahLearned(surah.number, surah.numberOfAyahs)}
                   aria-pressed={isComplete}
@@ -1158,7 +1362,9 @@ const App: React.FC = () => {
             <button onClick={() => setShowSidebar(!showSidebar)} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-600 dark:text-slate-300">
               <List className="w-5 h-5" />
             </button>
-            {view === 'mushaf' ? (
+            {view === 'review' ? (
+              <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">Review</h1>
+            ) : view === 'mushaf' ? (
               // A page carries whatever surahs happen to fall on it, which is rarely the one
               // the sidebar has selected.
               pageSurahs && (
@@ -1177,12 +1383,30 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1">
+            {/* The one place the queue is counted. The sidebar is the text index and is folded
+                away below lg; the player bar belongs to the audio. */}
+            <button
+              onClick={() => setView(v => (v === 'review' ? lastReadingViewRef.current : 'review'))}
+              title={view === 'review' ? 'Back to reading' : 'Review'}
+              className={`relative p-2 rounded-full transition-all ${
+                view === 'review'
+                  ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
+              }`}
+            >
+              <BookCheck className="w-5 h-5" />
+              {review.dueQueue.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-indigo-600 text-white text-[10px] font-bold tabular-nums">
+                  {review.dueQueue.length}
+                </span>
+              )}
+            </button>
             <button
               onClick={() => setView(v => (v === 'list' ? 'mushaf' : 'list'))}
-              title={view === 'list' ? 'Mushaf page view' : 'Verse list'}
+              title={view === 'mushaf' ? 'Verse list' : 'Mushaf page view'}
               className="p-2 text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-full transition-all"
             >
-              {view === 'list' ? <BookMarked className="w-5 h-5" /> : <Rows3 className="w-5 h-5" />}
+              {view === 'mushaf' ? <Rows3 className="w-5 h-5" /> : <BookMarked className="w-5 h-5" />}
             </button>
             <button
               onClick={() => {
@@ -1216,6 +1440,16 @@ const App: React.FC = () => {
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
             </div>
+          ) : view === 'review' ? (
+            <ReviewDashboard
+              review={review}
+              suggestion={suggestedPage}
+              rangeOf={rangeOf}
+              label={unitLabel}
+              proposal={adoptionProposal}
+              onReview={startReview}
+              onPractice={startPractice}
+            />
           ) : view === 'mushaf' ? (
             <div className="pb-12">
               {mushafFailed ? (
@@ -1252,6 +1486,26 @@ const App: React.FC = () => {
                       <ChevronRight className="w-5 h-5" />
                     </button>
                   </div>
+
+                  {/* Taking a page up where you actually are when you decide to. */}
+                  {(() => {
+                    const unit: UnitRef = { kind: 'page', ref: mushafPage };
+                    const inRotation = !!review.find(unit);
+                    const due = review.isDueNow(unit);
+                    if (!inRotation && !review.gate.open) return null;
+                    return (
+                      <div className="flex justify-center -mt-3 mb-5">
+                        <button
+                          onClick={() => (inRotation && !due ? startPractice(unit) : startReview(unit))}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-200 dark:hover:border-indigo-800 transition-colors"
+                        >
+                          <BookCheck className="w-3.5 h-3.5" />
+                          {!inRotation ? 'Add to review' : due ? 'Review this page' : 'Practise this page'}
+                        </button>
+                      </div>
+                    );
+                  })()}
+
                   <MushafPage
                     page={mushafPage}
                     lines={getMushafPage(mushafPage)}

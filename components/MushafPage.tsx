@@ -12,8 +12,19 @@ interface MushafPageProps {
   basmala: string;
   /** The surah an ayah *opens*, or null if it merely continues one. Drives the bands. */
   surahOf: (ayah: number) => Surah | null;
-  onPointerDown: (e: React.PointerEvent<HTMLElement>) => void;
-  onClick: (e: React.MouseEvent<HTMLElement>) => void;
+  /**
+   * Global ayah number from which the page is covered up; null draws it as printed.
+   *
+   * A primitive rather than a set or a predicate, so the memo below still holds when the drill
+   * advances one ayah. The decision is per run, which is exactly right: a run belongs to one
+   * ayah and lies in one line, and just under half the verse lines here carry more than one
+   * ayah - covering by line would be wrong about as often as it was right.
+   */
+  hiddenFrom?: number | null;
+  // Optional because a word is not a selection handle in the drill: there, a tap means reveal,
+  // and the session hangs its own handler on instead.
+  onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
+  onClick?: (e: React.MouseEvent<HTMLElement>) => void;
 }
 
 /**
@@ -36,6 +47,7 @@ const MushafPage: React.FC<MushafPageProps> = ({
   currentAyahNumber,
   basmala,
   surahOf,
+  hiddenFrom = null,
   onPointerDown,
   onClick,
 }) => {
@@ -142,28 +154,42 @@ const MushafPage: React.FC<MushafPageProps> = ({
                 }}
                 className="w-full text-slate-900 dark:text-slate-100"
               >
-                {line.runs.map(([ayah, glyphs], r) => (
-                  <span
-                    key={r}
-                    data-ayah-number={ayah}
-                    onPointerDown={onPointerDown}
-                    onClick={onClick}
-                    // Vertical padding on an inline box overflows instead of pushing the lines
-                    // apart, so this costs nothing in layout and closes the dead ground between
-                    // two lines - where a drag would otherwise lose the verse it was tracking.
-                    style={{ paddingBlock: '0.25em' }}
-                    className={`cursor-pointer rounded transition-colors ${
-                      ayah === currentAyahNumber
-                        ? 'bg-indigo-200/70 dark:bg-indigo-500/40'
-                        : isSelected(ayah)
-                          ? 'bg-indigo-100/70 dark:bg-indigo-900/50'
-                          : ''
-                    }`}
-                  >
-                    {glyphs}
-                    {r < line.runs.length - 1 ? ' ' : ''}
-                  </span>
-                ))}
+                {line.runs.map(([ayah, glyphs], r) => {
+                  const hidden = hiddenFrom !== null && ayah >= hiddenFrom;
+                  return (
+                    <span
+                      key={r}
+                      data-ayah-number={ayah}
+                      onPointerDown={onPointerDown}
+                      onClick={onClick}
+                      // Vertical padding on an inline box overflows instead of pushing the lines
+                      // apart, so this costs nothing in layout and closes the dead ground between
+                      // two lines - where a drag would otherwise lose the verse it was tracking.
+                      // It is also why the highlight has to stay translucent: an opaque band
+                      // would visibly bleed into the lines above and below.
+                      style={{ paddingBlock: '0.25em' }}
+                      // Covered up by going transparent, never by being removed or replaced.
+                      // The type on this page is sized by measuring its widest line
+                      // (see below), so anything that changed a line's width would send that
+                      // measurement chasing a new answer on every reveal - and the printed line
+                      // breaks, the whole point of this view, would move. Transparent text
+                      // changes no box at all, keeps the highlight behind the ayah that is owed,
+                      // and fades in for free through the transition already here.
+                      className={`cursor-pointer rounded transition-colors ${
+                        hidden ? 'text-transparent' : ''
+                      } ${
+                        ayah === currentAyahNumber
+                          ? 'bg-indigo-200/70 dark:bg-indigo-500/40'
+                          : hidden || !isSelected(ayah)
+                            ? ''
+                            : 'bg-indigo-100/70 dark:bg-indigo-900/50'
+                      }`}
+                    >
+                      {glyphs}
+                      {r < line.runs.length - 1 ? ' ' : ''}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           );

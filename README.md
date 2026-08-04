@@ -1,5 +1,4 @@
 # todo
-- Review Modus, Leerzeichen um die nächste Ayah anzuzeigen
 - Seitenansicht mit korrektem Page break
 - Pause anch jedem Vers oder nach dem Block
 - Korrektur beim Lesen AI gestützt 
@@ -79,6 +78,40 @@ verses in the list view.
 entire surah from the sidebar. Each surah row shows `learned/total` and a hairline progress bar;
 the sidebar header shows the overall count.
 
+**Review what you know, and earn what comes next.** The check-book button in the header opens a
+third view: a rotation of everything you have taken up, what is due today, and whether you have
+earned a new piece.
+
+A *unit* is either a Mushaf page or a whole surah — the same thing to everything below, an ayah
+range with a schedule. Pages suit a steady front; a surah suits something you learned as a whole.
+Take a page up from the Mushaf view where you are standing, or a surah from its row in the
+sidebar.
+
+Drilling one covers the printed page and uncovers it an ayah at a time. You recite into the gap —
+the ayah you owe stays highlighted as an empty band in its own shape — and press space when you
+want to see whether you had it. The line breaks stay exactly where they are printed, because the
+text is only made transparent, never removed. A surah spanning several pages turns them itself as
+you go. At the end you rate the whole unit once: **Halting**, **Solid** or **Fluent**, each shown
+with the interval it buys.
+
+Scheduling is [FSRS](https://github.com/open-spaced-repetition/ts-fsrs), capped at 30 days —
+something not recited for a month is not memorized, whatever the model says. Due dates are days,
+not moments: a unit planned for today is due at breakfast, not at the hour you happened to rate it.
+
+**New material is earned, not chosen.** The gate opens only when nothing is due *and* each of the
+last three units was last rated Solid or better over at least three ratings. Since a unit can only
+be rated while it is actually due, those three ratings are three different days — a unit cannot
+vouch for itself on the day you learned it. Typically that puts about a week between new pages.
+That is the point: the usual reason hifz collapses is a review debt growing faster than the time
+to service it.
+
+When the gate is shut it says which unit is holding it and offers to drill that one. **Practice**
+mode is always available on anything, from anywhere, and writes nothing at all — that is the
+release valve for when a page is too big a bite this week.
+
+Taking a unit up marks its verses learned. Removing one from the rotation does *not* unmark them:
+a decision about scheduling should not erase a record of what you know.
+
 Everything — selection, settings and progress — is kept in the browser's `localStorage`.
 
 ---
@@ -103,9 +136,14 @@ set in `vite.config.ts`.
 | `npm run preview` | Serve the built output |
 | `npm run fetch:quran` | Re-download the text into `public/data/` (rarely needed — see below) |
 | `npm run fetch:mushaf` | Re-download the Mushaf page layout (604 requests, about a minute) |
+| `npm run check:review` | Check the review scheduler — the gate, the day boundary, the stored form |
 | `npx tsc --noEmit` | Type check (not part of the build — Vite transpiles without checking) |
 
-There is no test suite.
+There is no test framework. `check:review` is one script in the style of the two fetch scripts:
+it imports `services/review.ts` straight into Node — which strips the types itself — asserts its
+way through the cases that fail silently rather than loudly, and exits non-zero. That is also why
+that module touches neither the browser nor the other two services: both read `import.meta.env`
+as they load, and would throw outside Vite.
 
 ---
 
@@ -125,6 +163,12 @@ Icons are `lucide-react`. State is plain `useState`; there is no state managemen
 | `components/AyahRow.tsx` | One verse card. Memoized — a drag updates the range every pointer frame, and Al-Baqara has 286 rows |
 | `components/MushafPage.tsx` | One printed page: its lines, the surah bands, and the type size measured to fit the measure |
 | `services/mushaf.ts` | Loads the page layout on first use, and one QCF font per page from a CDN |
+| `services/review.ts` | The whole scheduler: the stored shape, FSRS, due dates, the gate. No browser, no other service — so it can be checked under Node |
+| `hooks/useReview.ts` | That state in React, persisted, recomputed when the day turns |
+| `hooks/useMushafLayout.ts` | The lazy layout load, for whichever view needs pages |
+| `components/ReviewDashboard.tsx` | The rotation: what is due, what is earned, what is in it |
+| `components/ReviewSession.tsx` | The drill. Its entire state is one number — how many ayahs are uncovered |
+| `scripts/check-review.mjs` | Checks the scheduler. Run by hand, not by the build |
 | `scripts/fetch-mushaf.mjs` | Downloads and checks that layout. Run by hand, not by the build |
 | `hooks/useVerseRangeSelection.ts` | The drag gesture: pointer events, touch long-press, edge auto-scroll, hit testing |
 | `services/quranApi.ts` | Reads the bundled text into memory and hands out surahs; builds the audio URL |
@@ -180,6 +224,7 @@ still needs a connection; the text does not.
 | Key | Contents |
 |---|---|
 | `hifz_learned` | `{ surahNumber: [verseNumber, …] }` — the memorization progress |
+| `hifz_review` | `{ version, units: [{ kind, ref, card, addedAt, lastGrade }] }` — the review rotation. `kind` is `page` or `surah` and `ref` the number of one; `card` is the FSRS state. **The array order is the record**: "the last three units" is a slice, which survives a timezone change and a wrong clock in a way a sort by date would not |
 | `hifz_selection` | `{ surah, start, end }` — one selection at a time |
 | `hifz_reciter` | Edition id of the reciter |
 | `hifz_verse_repeat` | Repeats per verse |
@@ -203,6 +248,12 @@ was still shared across reciters.
 - **Text in the verse list cannot be selected or copied.** Native text selection is suppressed so
   that dragging picks verses instead of highlighting words. In the Mushaf view it could not work
   anyway: those characters are per-page glyph codes, not Arabic.
+- **The review drill needs a connection too**, and for the same reason: it sets the printed page,
+  so it needs that page's font. Without one it says so rather than showing a blank page.
+- **A drill is not resumable.** Closing one throws the pass away — it asks first, and says how far
+  in you are. Storing it would be a claim about what was recited, which is the one thing this
+  feature must not get wrong. A long surah is therefore a long sitting; the pages are there for
+  when that is too much.
 - **The Mushaf view needs a connection**, for its page fonts. It also shows no progress marks, and
   its two ornamental lines are an approximation — the band is drawn from the surah name rather
   than with the ornamental font the print uses, and the two surahs that get no blank line of their
