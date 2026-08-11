@@ -2,7 +2,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Eye, Undo2, X } from 'lucide-react';
 import type { Card, Grade } from 'ts-fsrs';
-import { AyahRange, MushafLine, Surah } from '../types';
+import { AyahRange, MushafLine } from '../types';
 import { UnitRef, HALTING, SOLID, FLUENT, previewGrades } from '../services/review';
 import { getMushafPage, getPageOfAyah, loadPageFont, warmPageFont } from '../services/mushaf';
 import MushafPage from './MushafPage';
@@ -16,8 +16,6 @@ interface ReviewSessionProps {
   /** The card being drilled, for the price tags on the grading bar. Null for a new unit. */
   card: Card | null;
   title: string;
-  basmala: string;
-  surahOf: (ayah: number) => Surah | null;
   surahNameOf: (ayah: number) => string;
   onGrade: (rating: Grade) => void;
   onClose: () => void;
@@ -47,8 +45,6 @@ const ReviewSession: React.FC<ReviewSessionProps> = ({
   mode,
   card,
   title,
-  basmala,
-  surahOf,
   surahNameOf,
   onGrade,
   onClose,
@@ -228,8 +224,6 @@ const ReviewSession: React.FC<ReviewSessionProps> = ({
               // The session's own cursor, not the player's: the highlight has to sit on the ayah
               // being recited right now, which has nothing to do with where the audio stopped.
               currentAyahNumber={done ? 0 : frontier}
-              basmala={basmala}
-              surahOf={surahOf}
               // Null once the pass is done, so the page reads as printed again. Otherwise the
               // last page of a surah drill would keep whatever follows the unit covered for
               // good - you would have finished, owe nothing, and still be looking at a hole.

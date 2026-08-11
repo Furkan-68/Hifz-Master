@@ -9,8 +9,8 @@ A Qur'an memorization companion. Pick a range of verses by dragging across them,
 that block on a loop — with per-verse repeats, a pause sized to what you just heard,
 adjustable playback speed, and a record of what you already know.
 
-Runs entirely in the browser. No account, no backend, no API key. The text ships with the app —
-only the recitation comes off the network.
+Runs entirely in the browser. No account, no backend, no API key. The text and the fonts ship
+with the app — only the recitation comes off the network.
 
 ---
 
@@ -64,15 +64,22 @@ shipping its text edition alongside it; see `todo.md`. The four that are offered
 checked against all 69 codepoints the bundled text uses.
 
 **Read the printed page.** A second view sets the Madinah Mushaf line for line as it is printed —
-604 pages, the ornamental band and basmala at each surah, the verse numbers in their rosettes.
-Switch to it with the book button in the header. Selecting a range works exactly as in the list:
-drag across the words, and the highlight follows the text around the line breaks. Playback,
-repeats and pauses are unchanged; the page turns by itself when the recitation leaves it.
+604 pages, the ornamental band and basmala at each surah, the verse numbers in their rosettes, the
+rubʿ al-hizb marks. Switch to it with the book button in the header. Selecting a range works
+exactly as in the list: drag across the words, and the highlight follows the text around the line
+breaks. Playback, repeats and pauses are unchanged; the page turns by itself when the recitation
+leaves it.
 
-This view is built on the QCF page fonts — one font file per page, one glyph per word — which is
-the only way to reproduce the printed line breaks. That has consequences worth knowing: the page
-fonts come off a CDN, so this view needs a connection, and it shows no progress marks. Mark
-verses in the list view.
+The edition is the **1441 H print**, the one the Complex sells in Madinah today. That matters more
+than a date: it breaks its lines differently from the 1421 H print on 355 of the 604 pages, so on
+more than half the Mushaf a page set from the older edition does not match what is in your hands.
+Which verses a page holds is the same in both, on every page.
+
+This view is built on the QCF V4 fonts — one glyph per word, 47 files covering the 604 pages —
+which is the only way to reproduce the printed line breaks. They ship with the app but are not
+loaded at startup: a face arrives when a page asks for it, and covers the next six to fifteen
+pages. One consequence worth knowing is that this view shows no progress marks. Mark verses in
+the list view.
 
 **Track what you have learned.** Mark a single verse with the check button on its card, or an
 entire surah from the sidebar. Each surah row shows `learned/total` and a hairline progress bar;
@@ -125,7 +132,7 @@ npm install
 npm run dev
 ```
 
-The dev server listens on port `3000` and binds `0.0.0.0`, so the app is also reachable from
+The dev server listens on port `3100` and binds `0.0.0.0`, so the app is also reachable from
 another device on the same network (useful for testing the touch gestures on a phone). Both are
 set in `vite.config.ts`.
 
@@ -135,7 +142,8 @@ set in `vite.config.ts`.
 | `npm run build` | Production build into `dist/` |
 | `npm run preview` | Serve the built output |
 | `npm run fetch:quran` | Re-download the text into `public/data/` (rarely needed — see below) |
-| `npm run fetch:mushaf` | Re-download the Mushaf page layout (604 requests, about a minute) |
+| `npm run fetch:mushaf` | Re-download the Mushaf page layout (605 requests, about a minute) |
+| `npm run fetch:fonts` | Re-download the fonts into `public/fonts/` (113 requests, ~38 MB) |
 | `npm run check:review` | Check the review scheduler — the gate, the day boundary, the stored form |
 | `npx tsc --noEmit` | Type check (not part of the build — Vite transpiles without checking) |
 
@@ -149,20 +157,25 @@ as they load, and would throw outside Vite.
 
 ## How it is put together
 
-React 19 + TypeScript, bundled by Vite. Tailwind comes from a CDN `<script>` in `index.html`,
-so there is no CSS build step and no `tailwind.config.js` — utility classes are written inline.
-The Arabic type is the one exception: family, size and leading per face sit in a `<style>` block
-in `index.html`, because a Tailwind size utility and that rule carry equal specificity and the
-CDN decides which is injected last.
+React 19 + TypeScript, bundled by Vite. Tailwind v4 is compiled into the bundle by
+`@tailwindcss/vite`, so utility classes are written inline and what ships is one minified
+stylesheet rather than a compiler. There is no `tailwind.config.js`: v4 is configured in CSS,
+and the two lines this app needs — which files to scan, and dark mode following a class rather
+than the media query — are at the top of `index.css`.
+The Arabic type is the one exception to writing styles inline: family, size and leading per face
+sit in `index.css`, because a Tailwind size utility and that rule carry equal specificity. They
+are deliberately outside any `@layer`, which is what settles it — unlayered CSS outranks every
+layer, so the Arabic rule wins whatever order the compiled utilities come out in.
 Icons are `lucide-react`. State is plain `useState`; there is no state management library.
 
 | File | Role |
 |---|---|
-| `index.html` | Tailwind's CDN tag, the pre-paint theme and font script, and every Arabic font definition — family, size and leading per face |
+| `index.html` | The pre-paint theme and font script, and the link to the mirrored Google Fonts stylesheet |
+| `index.css` | Tailwind's entry point, and every Arabic font definition — family, size and leading per face |
 | `App.tsx` | Everything stateful: playback engine, settings, sidebar, practice bar |
 | `components/AyahRow.tsx` | One verse card. Memoized — a drag updates the range every pointer frame, and Al-Baqara has 286 rows |
 | `components/MushafPage.tsx` | One printed page: its lines, the surah bands, and the type size measured to fit the measure |
-| `services/mushaf.ts` | Loads the page layout on first use, and one QCF font per page from a CDN |
+| `services/mushaf.ts` | Loads the page layout on first use, and the QCF4 faces a page needs from `public/fonts/` |
 | `services/review.ts` | The whole scheduler: the stored shape, FSRS, due dates, the gate. No browser, no other service — so it can be checked under Node |
 | `hooks/useReview.ts` | That state in React, persisted, recomputed when the day turns |
 | `hooks/useMushafLayout.ts` | The lazy layout load, for whichever view needs pages |
@@ -170,6 +183,7 @@ Icons are `lucide-react`. State is plain `useState`; there is no state managemen
 | `components/ReviewSession.tsx` | The drill. Its entire state is one number — how many ayahs are uncovered |
 | `scripts/check-review.mjs` | Checks the scheduler. Run by hand, not by the build |
 | `scripts/fetch-mushaf.mjs` | Downloads and checks that layout. Run by hand, not by the build |
+| `scripts/fetch-fonts.mjs` | Downloads and checks the fonts, both sets. Run by hand, not by the build |
 | `hooks/useVerseRangeSelection.ts` | The drag gesture: pointer events, touch long-press, edge auto-scroll, hit testing |
 | `services/quranApi.ts` | Reads the bundled text into memory and hands out surahs; builds the audio URL |
 | `scripts/fetch-quran.mjs` | Downloads and checks that text. Run by hand, not by the build |
@@ -196,23 +210,28 @@ Two things in there are load-bearing and easy to break:
 
 ## Where the data comes from
 
-**The text ships with the app.** All 6236 verses and all five translations live in
-`public/data/` — nothing is fetched from a text API at runtime. Switching surahs is a memory
-read, so it is instant and works offline.
+**The text ships with the app, and so do the fonts.** All 6236 verses and all five translations
+live in `public/data/`, and every face the app sets type in lives in `public/fonts/` — nothing
+is fetched from a text API, a font CDN or a stylesheet host at runtime. Switching surahs is a
+memory read, so it is instant, and everything but the recitation works offline.
 
 The files are generated, not written by hand:
 
 ```bash
-npm run fetch:quran
+npm run fetch:quran   # the text
+npm run fetch:mushaf  # the Mushaf page layout
+npm run fetch:fonts   # both sets of fonts
 ```
 
-That downloads everything from [alquran.cloud](https://alquran.cloud/api) in six requests,
-normalizes it, checks it, and writes `public/data/`. It is deliberately **not** part of the
-build — a build must not depend on the network. See `public/data/README.md` for what it
-normalizes, and for the sources and their terms.
+`fetch:quran` downloads everything from [alquran.cloud](https://alquran.cloud/api) in six
+requests, normalizes it, checks it, and writes `public/data/`. `fetch:fonts` mirrors the 48
+QCF V4 faces and the five interface faces into `public/fonts/`. All three are deliberately
+**not** part of the build — a build must not depend on the network. See `public/data/README.md`
+and `public/fonts/README.md` for the sources and their terms.
 
-Sizes: 1.3 MB of Arabic (265 KB gzipped, loaded once at startup) and 756 KB–1.1 MB per
-translation, fetched the first time you pick that edition.
+Sizes: 1.3 MB of Arabic (265 KB gzipped, loaded once at startup), 756 KB–1.1 MB per translation
+fetched the first time you pick that edition, 2.3 MB of interface fonts of which a browser
+downloads only the subsets it needs, and 36 MB of Mushaf faces of which a sitting touches a few.
 
 **Audio is the exception** and still comes from `cdn.islamic.network` — one MP3 per verse,
 addressed by the *global* ayah number (1–6236), not the number within the surah. A full
@@ -232,7 +251,7 @@ still needs a connection; the text does not.
 | `hifz_verse_pause_factors` | `{ reciterId: factor }` — the pause after each verse |
 | `hifz_playback_rate` | Playback speed |
 | `hifz_show_translation`, `hifz_translation` | Translation on/off and edition id |
-| `hifz_arabic_font` | Id of the Arabic face, matching a `[data-arabic-font]` rule in `index.html` |
+| `hifz_arabic_font` | Id of the Arabic face, matching a `[data-arabic-font]` rule in `index.css` |
 | `hifz_view` | `list` or `mushaf` |
 
 `hifz_pause_factor` (singular) is only read once, to migrate a value from when the pause factor
@@ -248,16 +267,13 @@ was still shared across reciters.
 - **Text in the verse list cannot be selected or copied.** Native text selection is suppressed so
   that dragging picks verses instead of highlighting words. In the Mushaf view it could not work
   anyway: those characters are per-page glyph codes, not Arabic.
-- **The review drill needs a connection too**, and for the same reason: it sets the printed page,
-  so it needs that page's font. Without one it says so rather than showing a blank page.
 - **A drill is not resumable.** Closing one throws the pass away — it asks first, and says how far
   in you are. Storing it would be a claim about what was recited, which is the one thing this
   feature must not get wrong. A long surah is therefore a long sitting; the pages are there for
   when that is too much.
-- **The Mushaf view needs a connection**, for its page fonts. It also shows no progress marks, and
-  its two ornamental lines are an approximation — the band is drawn from the surah name rather
-  than with the ornamental font the print uses, and the two surahs that get no blank line of their
-  own ('Abasa and At-Tariq) get no band at all. The verse lines themselves are exact.
+- **The Mushaf view shows no progress marks.** The band above each surah is the Complex's own
+  calligraphic glyph, but only the name — the frame drawn around it in the print is not in the
+  font, and is not reproduced.
 - **Progress is local to one browser.** No account, no sync, no export — clearing site data
   clears it.
 - **No way to reset all progress at once.** A surah marked by accident can be unmarked with the

@@ -14,7 +14,7 @@ The script (`scripts/fetch-quran.mjs`) refuses to write anything that fails its 
 | `surahs.json` | 114 surahs: number, both names, verse count, revelation type |
 | `quran.json` | Arabic text, `string[][]` — surah index, then verse index |
 | `translations/<edition>.json` | One English edition, same shape |
-| `mushaf-v2.json` | The page layout of the printed Madinah Mushaf — see below |
+| `mushaf-v4.json` | The page layout of the printed Madinah Mushaf — see below |
 
 Verse numbers are not stored. `numberInSurah` is the array index + 1, and the global number
 (1–6236, which addresses the audio file) is the running count derived from `numberOfAyahs` —
@@ -34,17 +34,24 @@ generation; apart from the removals above they match byte for byte.
 
 ## The Mushaf layout
 
-`mushaf-v2.json` is generated separately and describes the printed page rather than the text:
+`mushaf-v4.json` is generated separately and describes the printed page rather than the text:
 
 ```bash
 npm run fetch:mushaf
 ```
 
-604 requests to the [quran.com API](https://api.quran.com/api/v4), about a minute. Shape: 604
-pages, each an array of its printed lines, one JSON line per printed line.
+The edition is the **1441 H print**, the one the Complex sells today — not the 1421 H print the
+app set until now. The two differ in where the lines break on 355 of the 604 pages; they differ
+on none in which verses a page holds.
+
+605 requests to a pinned commit of [`quran-qcf4`](https://github.com/MohamadHajjRabee/quran-qcf4),
+about a minute. Shape: a `pageFont` array and 604 pages, each an array of its printed lines, one
+JSON line per printed line.
 
 ```json
 {"type":"ayah","runs":[[6231,"ﭑ ﭒ ﭓ"],[6232,"ﭔ"]]}
+{"type":"surah","sura":114,"glyph":"ﰲ"}
+{"type":"bismillah","glyph":""}
 {"type":"blank"}
 ```
 
@@ -52,25 +59,26 @@ A **run** is `[global ayah number, glyphs]` — the consecutive words of one aya
 It becomes exactly one span in the DOM, which is what lets a verse range be selected by dragging
 across the page: a run never mixes two ayahs and never crosses a line break.
 
-**The glyphs are not Arabic.** Each character addresses one word in *that page's own font*, and
-means a different word in any other page's font. `ﭑ` on page 604 is not `ﭑ` on page 1. Nothing
-here is searchable, copyable, or convertible back to text — the Unicode text lives in
-`quran.json`, and the two cannot be mixed.
+**The glyphs are not Arabic.** Each character addresses one word in *the font that draws that
+page*, and means a different word in any other. Nothing here is searchable, copyable, or
+convertible back to text — the Unicode text lives in `quran.json`, and the two cannot be mixed.
+One font covers a stretch of six to fifteen pages, which is what `pageFont` records: entry *n* is
+the number of the `QCF4_Hafs_NN` face that draws page *n*.
 
-`{"type":"blank"}` lines are the ornamental ones that introduce a surah: its name in a band, and
-below it the basmala. Which of the two a given blank line carries is left to the renderer,
-because the printed gap is one, two, or three lines depending on where the surah falls. Two
-surahs — 'Abasa and At-Tariq — get no blank line at all.
+The two ornamental kinds carry a glyph of their own, so the renderer no longer has to guess which
+blank line holds what: 114 surah bands and 112 basmalas (Al-Fatiha counts its basmala as verse 1,
+At-Tawba has none). The band is set in `QCF4_QBSML`; the basmala is *not* in the font of the page
+it stands on but always in `QCF4_Hafs_01`.
 
-The script writes nothing unless every check passes: 604 pages, all 6236 ayahs present, every
-surah opening a line of its own, exactly 114 stretches of blank lines, and the same number of
-words written as the API returned. That last one matters more than it looks — `code_v2` sometimes
-holds two glyphs separated by a space for a single word, so a word count taken by splitting the
-finished string comes out 198 too high.
+The rub' al-hizb markers — 199 of them — belong to no ayah. Each rides inside the run of the word
+it precedes, which keeps the printed order of the line and spares the renderer a third kind of
+thing to lay out.
 
-One quirk of the source worth knowing: `by_page/N` answers with the verses that *begin* on page
-N, including the words of a verse that spills onto N+1 — numbered from line 1 of that next page.
-Every word is therefore filed by its own `page_number`, not by the response it arrived in.
+The script writes nothing unless every check passes: 604 pages of at most 15 lines, all 6236
+ayahs present, every surah opening a line of its own, 77,448 words, 6236 verse-end marks, 199
+quarter marks, 114 bands against 112 basmalas — and, while the previous edition is still on disk,
+that every page holds exactly the verses it held before. That last one is what makes the change
+safe: a stored review unit of kind `page` still means what it meant.
 
 ## Sources and terms
 
@@ -79,11 +87,13 @@ alquran.cloud. Tanzil asks that the text be distributed unmodified and with attr
 that this copy is *structurally* altered as described above: no verse text was edited, but the
 basmala was detached from the opening verses.
 
-**The Mushaf layout** — from the [quran.com API](https://api.quran.com/api/v4), which publishes
-the line and page of every word of the Madinah Mushaf together with its QCF glyph code. The
-fonts themselves are not stored here; they are fetched per page at runtime, see
-`services/mushaf.ts`. They are the work of the King Fahd Glorious Quran Printing Complex, free
-to use and distribute but not to modify or sell.
+**The Mushaf layout** — from [`quran-qcf4`](https://github.com/MohamadHajjRabee/quran-qcf4),
+which publishes the line and page of every word of the 1441 H Madinah Mushaf together with its
+QCF4 glyph code. Its JSON is MIT; it was cross-checked against quran.com's own V4 layout
+(`mushaf=19`), which agrees with it word for word but publishes no V4 glyph codes of its own.
+
+The fonts that draw this layout are not here but in `public/fonts/qcf4/`, taken from the same
+pinned commit. See `public/fonts/README.md` for whose work they are and on what terms.
 
 **Translations** — five English editions:
 

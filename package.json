@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "fetch:quran": "node scripts/fetch-quran.mjs",
     "fetch:mushaf": "node scripts/fetch-mushaf.mjs",
+    "fetch:fonts": "node scripts/fetch-fonts.mjs",
     "check:review": "node scripts/check-review.mjs"
   },
   "dependencies": {
@@ -18,10 +19,12 @@
     "ts-fsrs": "^5.4.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

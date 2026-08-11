@@ -25,12 +25,18 @@ export interface SurahDetail extends Surah {
  * line. It becomes exactly one span, which is what lets a range be selected by word without a
  * span per word: a run never mixes two ayahs and never crosses a line break.
  *
- * The glyphs are not Arabic. Each addresses one word in that page's own QCF font and means
- * nothing in any other; see public/data/README.md.
+ * The glyphs are not Arabic. Each addresses one word in the QCF font that draws this page and
+ * means nothing in any other; see public/data/README.md. That holds for the two ornamental
+ * kinds as well - they carry a glyph rather than text, and each is set in a font of its own.
  */
 export type MushafLine =
   | { type: 'ayah'; runs: [number, string][] }
-  | { type: 'blank' }; // the ornamental lines that introduce a surah, and page margins
+  | { type: 'surah'; sura: number; glyph: string }   // the band naming a surah
+  // The basmala's glyph is what the source names, kept so the layout stays a faithful record of
+  // it. It is not what gets drawn: three of the codes it uses are not usable basmalas in any of
+  // the 47 faces, so the renderer draws BASMALA_GLYPH instead. See services/mushaf.ts.
+  | { type: 'bismillah'; glyph: string }
+  | { type: 'blank' };                               // page margins
 
 // Global ayah numbers rather than indices into one surah: a Mushaf page runs across surah
 // boundaries, and so may a range selected on it.

@@ -4,33 +4,57 @@ import { MushafLine } from '../types';
 /**
  * The page-faithful Madinah Mushaf: its layout, and the fonts that draw it.
  *
- * Two things come from elsewhere than the rest of the app:
+ * The edition is the 1441 H print, the one the Complex sells today. Its line breaks differ
+ * from the 1421 H print on 355 of the 604 pages; which verses a page holds differs on none,
+ * which is why a stored review unit of kind `page` still means what it always meant.
  *
- * - The layout ships with the app but is *not* loaded at startup. It is 697 KB that only the
- *   Mushaf view needs, and the list view must keep opening as fast as it does.
- * - The fonts are fetched from a CDN, one file per page. All 604 come to about 30 MB, which is
- *   far too much to vendor for a view that shows a handful of pages per sitting. Pinned to a
- *   commit rather than a branch, so the bytes cannot change under us.
+ * Both of the things this needs ship with the app, and neither is loaded at startup:
+ *
+ * - The layout is 687 KB that only the Mushaf view needs, and the list view must keep opening
+ *   as fast as it does.
+ * - The fonts come to about 36 MB across 48 files, so they are fetched a face at a time as
+ *   pages ask for them. One face covers 6-15 consecutive pages, so a sitting pulls a handful.
  */
 
-const LAYOUT_URL = `${import.meta.env.BASE_URL}data/mushaf-v2.json`;
+const LAYOUT_URL = `${import.meta.env.BASE_URL}data/mushaf-v4.json`;
 
-// QCF V2 - the 1423 H Madinah print. It has to be V2 specifically: the layout addresses words
-// through the API's `code_v2`, and a V1 font maps the very same codepoints to different words,
-// so mixing the two produces fluent nonsense rather than an obvious error.
+// QCF V4 - the 1441 H Madinah print. It has to be V4 specifically: the layout addresses words
+// through that edition's glyph codes, and a V1 or V2 font maps the very same codepoints to
+// different words, so mixing them produces fluent nonsense rather than an obvious error.
 //
-// TrueType rather than woff2, and pinned to a commit rather than a branch. quran.com serves V2
-// as woff2 at a fifth of the size, but without an Access-Control-Allow-Origin header, and the
-// FontFace API will not touch a cross-origin font without one. No mirror publishes V2 as woff2.
-// So: 160-620 KB for the first visit to a page, cached by the browser from then on.
-const FONT_BASE = 'https://cdn.jsdelivr.net/gh/nuqayah/qpc-fonts@8a4f39d563ea69c994416a1692827e38156c548d/mushaf-v2';
+// woff2, so the first visit to a *stretch* of pages costs 360-924 KB rather than triple that.
+// Put here by `npm run fetch:fonts`, from the same pinned commit the layout comes from; see
+// public/fonts/README.md.
+const FONT_BASE = `${import.meta.env.BASE_URL}fonts/qcf4`;
 
 export const MUSHAF_PAGES = 604;
 
-/** The family name a page's glyphs have to be set in. Only meaningful once its font is loaded. */
-export const pageFontFamily = (page: number) => `QCF_P${String(page).padStart(3, '0')}`;
+/** The band naming a surah is drawn from one font for the whole Mushaf, not per page. */
+export const BAND_FAMILY = 'QCF4_QBSML';
 
-let pages: MushafLine[][] | null = null;
+/**
+ * The glyph the basmala line is drawn with - not the one the layout carries.
+ *
+ * The source names a basmala code per page: U+F8D6 on 109 of the 112 openings, U+F8D7 on two,
+ * U+F8DD on one. Only the last of those is a basmala anyone can use. U+F8D6 and U+F8D7 exist
+ * in exactly one of the 47 faces, QCF4_Hafs_01, and what they draw there is two half-basmalas
+ * laid on top of each other - a smear of overlapping strokes rather than a line of text. It is
+ * not a fault in how we set them: the upstream project's own demo draws the same smear.
+ *
+ * U+F8DD is the whole basmala in one glyph, and every face carries it, byte for byte the same
+ * one: advance 6.369 em, ink from 0.175 to 6.275 em, so it also sits centred in its own box
+ * and needs no nudging. Taking it from the page's own font rather than borrowing a face means
+ * an opening page pulls no file it would not have pulled anyway.
+ */
+export const BASMALA_GLYPH = '\uF8DD';
+
+interface Layout {
+  /** Page -> the number of the QCF4_Hafs face that draws it. One face covers 6-15 pages. */
+  pageFont: number[];
+  pages: MushafLine[][];
+}
+
+let layout: Layout | null = null;
 // Global ayah number -> the page it starts on. Built once, so jumping from the list view to
 // the page holding a verse is a lookup rather than a scan of 604 pages.
 let pageOfAyah: Map<number, number> | null = null;
@@ -42,11 +66,11 @@ export const loadMushaf = (): Promise<void> => {
     loading = fetch(LAYOUT_URL)
       .then((response) => {
         if (!response.ok) throw new Error(`Failed to load the Mushaf layout: HTTP ${response.status}`);
-        return response.json() as Promise<MushafLine[][]>;
+        return response.json() as Promise<Layout>;
       })
       .then((data) => {
         const index = new Map<number, number>();
-        data.forEach((lines, i) => {
+        data.pages.forEach((lines, i) => {
           for (const line of lines) {
             if (line.type !== 'ayah') continue;
             for (const [ayah] of line.runs) {
@@ -55,7 +79,7 @@ export const loadMushaf = (): Promise<void> => {
             }
           }
         });
-        pages = data;
+        layout = data;
         pageOfAyah = index;
       })
       .catch((err) => {
@@ -67,16 +91,25 @@ export const loadMushaf = (): Promise<void> => {
 };
 
 const loaded = () => {
-  if (!pages || !pageOfAyah) throw new Error('The Mushaf layout is not loaded yet - await loadMushaf() first');
-  return { pages, pageOfAyah };
+  if (!layout || !pageOfAyah) throw new Error('The Mushaf layout is not loaded yet - await loadMushaf() first');
+  return { layout, pageOfAyah };
 };
 
 export const getMushafPage = (page: number): MushafLine[] => {
-  const { pages: all } = loaded();
-  const lines = all[page - 1];
+  const lines = loaded().layout.pages[page - 1];
   if (!lines) throw new Error(`No Mushaf page numbered ${page}`);
   return lines;
 };
+
+/** The family a page's word glyphs have to be set in. Only meaningful once its font is loaded. */
+export const pageFontFamily = (page: number): string => {
+  const face = loaded().layout.pageFont[page - 1];
+  return `QCF4_Hafs_${String(face).padStart(2, '0')}`;
+};
+
+/** The family a line's glyph is set in. Only the band breaks with its page; see BASMALA_GLYPH. */
+export const lineFontFamily = (line: MushafLine, page: number): string =>
+  line.type === 'surah' ? BAND_FAMILY : pageFontFamily(page);
 
 export const getPageOfAyah = (ayah: number): number => loaded().pageOfAyah.get(ayah) ?? 1;
 
@@ -96,17 +129,14 @@ export const getPageRange = (page: number): { start: number; end: number } | nul
 
 // --- fonts --------------------------------------------------------------------------------
 
-const fonts = new Map<number, Promise<void>>();
+const fonts = new Map<string, Promise<void>>();
 
-/**
- * Loads one page's font. Concurrent callers share the request, and a page already loaded
- * resolves immediately - so calling this on every render of a page is fine.
- */
-export const loadPageFont = (page: number): Promise<void> => {
-  let pending = fonts.get(page);
+/** Loads one family. Concurrent callers share the request; one already loaded resolves at once. */
+const loadFamily = (family: string): Promise<void> => {
+  let pending = fonts.get(family);
   if (!pending) {
-    const file = `${FONT_BASE}/QCF2${String(page).padStart(3, '0')}.ttf`;
-    const face = new FontFace(pageFontFamily(page), `url(${file}) format("truetype")`);
+    const file = `${FONT_BASE}/${family}${family === BAND_FAMILY ? '' : '_W'}.woff2`;
+    const face = new FontFace(family, `url(${file}) format("woff2")`);
     pending = face
       .load()
       .then((loadedFace) => {
@@ -114,15 +144,37 @@ export const loadPageFont = (page: number): Promise<void> => {
       })
       .catch((err) => {
         // Forgotten, so turning back to this page tries again rather than staying blank.
-        fonts.delete(page);
+        fonts.delete(family);
         throw err;
       });
-    fonts.set(page, pending);
+    fonts.set(family, pending);
   }
   return pending;
 };
 
-/** Fetches a neighbour's font in the background, so turning the page does not stall. */
+/** Every family a page needs: its own, plus the band's where it opens a surah. */
+const familiesOf = (page: number): string[] => {
+  const families = new Set([pageFontFamily(page)]);
+  for (const line of getMushafPage(page)) {
+    if (line.type === 'surah') families.add(lineFontFamily(line, page));
+  }
+  return [...families];
+};
+
+/**
+ * Loads everything one page is set in. Resolves only when all of it is there - a page half in
+ * its font is worse than a page still blank.
+ *
+ * A page opening a surah needs two files rather than one: its own and the band's. The basmala
+ * used to make it three; it now comes out of the page's own face.
+ *
+ * Cheap to call on every render: a face already loaded resolves immediately, and one file
+ * covers six to fifteen consecutive pages, so most page turns need no request at all.
+ */
+export const loadPageFont = (page: number): Promise<void> =>
+  Promise.all(familiesOf(page).map(loadFamily)).then(() => undefined);
+
+/** Fetches a neighbour's fonts in the background, so turning the page does not stall. */
 export const warmPageFont = (page: number): void => {
   if (page < 1 || page > MUSHAF_PAGES) return;
   loadPageFont(page).catch(() => {

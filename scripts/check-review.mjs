@@ -53,7 +53,7 @@ const same = (a, b, message) => check(JSON.stringify(a) === JSON.stringify(b), `
 
 // --- ranges, built the way App builds them ------------------------------------------------
 
-const pages = readJson('mushaf-v2.json');
+const { pages } = readJson('mushaf-v4.json');
 const surahs = readJson('surahs.json');
 
 const pageRanges = pages.map((lines) => {

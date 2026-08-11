@@ -1,0 +1,134 @@
+/* The whole of this app's hand-written CSS. Tailwind is compiled into it at build time by
+   @tailwindcss/vite, so what ships is one minified stylesheet and no compiler. */
+
+/* source(none) turns off the automatic scan and the @source lines below name what to read
+   instead. Not a micro-optimisation: the scan starts at the repository root, and public/ holds
+   38 MB of fonts and Quran text that hold no class names and take real time to walk. */
+@import "tailwindcss" source(none);
+@source "./index.html";
+@source "./*.tsx";
+@source "./components/**/*.tsx";
+@source "./hooks/**/*.{ts,tsx}";
+@source "./services/**/*.ts";
+
+/* Dark mode follows a class rather than the media query, because the setting is a three-way
+   one - light, dark, system - and only the first two can be a media query. The class lands on
+   <html> before the first paint, from the script in index.html. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  /* Tailwind's own reset leaves buttons at cursor: default, which is correct to the letter of
+     the HTML spec and wrong to everyone using this. Nothing here asks for cursor-pointer of
+     its own; every button in the app was written expecting to get it from the reset. */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+}
+/* Lets native bits - scrollbar corner, focus rings, form controls - follow along. */
+.dark {
+  color-scheme: dark;
+}
+.font-quran {
+  font-family: 'Amiri', serif;
+}
+
+/* --- The Arabic font of the verses -------------------------------------------------
+   Everything about the selectable fonts lives here, so App.tsx only ever deals in ids.
+   The id sits on <html data-arabic-font> - same mechanism as the dark class, and the
+   same reason: switching it repaints without re-rendering 286 memoized verse rows.
+
+   All four render the Uthmani rasm of the bundled Tanzil text correctly. The KFGQPC
+   Madinah Mushaf font does not, and is deliberately absent - see todo.md.
+
+   Each font brings its own size and leading. At the same pixel size Arabic faces differ
+   far more than Latin ones: Scheherazade sets a tall alef, Noto Naskh a much shorter one
+   over a similar horizontal run, and Amiri parks its marks nearly a full em above the
+   baseline. Both numbers were measured rather than guessed - canvas ink extents of a
+   bare word and of the basmala, at 100px, per family - and then trimmed by eye.
+
+   scale brings the letters to the size Scheherazade sets at 1, weighing letter height
+   against horizontal set so that a line still breaks in roughly the same place.
+   leading keeps the room above the line in the same proportion to the marks that
+   Scheherazade has at 2.5rem, which is what the app looked like before any of this.
+
+   Each font is declared once, for two selectors: on <html> it dresses the whole app, and
+   on a [data-font-sample] element it dresses just that one specimen in the settings
+   panel. Custom properties set on an element are readable by that same element, so the
+   previews come out normalized exactly like the real text - without the numbers below
+   having to exist twice. */
+:root,
+[data-font-sample='scheherazade'] {
+  --font-arabic: 'Scheherazade New', serif;
+  --font-arabic-scale: 1;
+  --font-arabic-leading: 1;
+}
+:root[data-arabic-font='amiri-quran'],
+[data-font-sample='amiri-quran'] {
+  --font-arabic: 'Amiri Quran', serif;
+  --font-arabic-scale: 1.15;
+  --font-arabic-leading: 1.35;
+}
+:root[data-arabic-font='amiri'],
+[data-font-sample='amiri'] {
+  --font-arabic: 'Amiri', serif;
+  --font-arabic-scale: 1.12;
+  --font-arabic-leading: 1.3;
+}
+:root[data-arabic-font='noto-naskh'],
+[data-font-sample='noto-naskh'] {
+  /* Noto sets a short alef over a wide run, so matching it on letter height alone would
+     blow the line width out and rewrap half the verses. 1.05 keeps the breaks where the
+     other three put them. */
+  --font-arabic: 'Noto Naskh Arabic', serif;
+  --font-arabic-scale: 1.05;
+  --font-arabic-leading: 1.05;
+}
+
+/* Size belongs here rather than in a Tailwind class on the element: .text-3xl and
+   .font-arabic-display have the same specificity, so one of them has to win on order. These
+   rules sit outside any @layer, and unlayered CSS outranks every layer, so this one does -
+   whatever order the compiled utilities happen to come out in. */
+.font-arabic-display {
+  font-family: var(--font-arabic);
+  font-size: calc(1.875rem * var(--font-arabic-scale));
+  line-height: calc(2.5rem * var(--font-arabic-leading));
+}
+.font-arabic-display.font-arabic-lg {
+  font-size: calc(2.25rem * var(--font-arabic-scale));
+}
+
+/* One specimen in the settings panel. Reads the variables its own [data-font-sample]
+   attribute just set, so it is scaled the way the verses will be. */
+.font-arabic-sample {
+  font-family: var(--font-arabic);
+  font-size: calc(1.125rem * var(--font-arabic-scale));
+  line-height: calc(2rem * var(--font-arabic-leading));
+}
+/* Custom scrollbar for better aesthetics */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}

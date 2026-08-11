@@ -1,7 +1,7 @@
 
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { AyahRange, MushafLine, Surah } from '../types';
-import { pageFontFamily } from '../services/mushaf';
+import { AyahRange, MushafLine } from '../types';
+import { BASMALA_GLYPH, lineFontFamily, pageFontFamily } from '../services/mushaf';
 
 interface MushafPageProps {
   page: number;
@@ -9,9 +9,6 @@ interface MushafPageProps {
   fontReady: boolean;
   selection: AyahRange | null;
   currentAyahNumber: number;
-  basmala: string;
-  /** The surah an ayah *opens*, or null if it merely continues one. Drives the bands. */
-  surahOf: (ayah: number) => Surah | null;
   /**
    * Global ayah number from which the page is covered up; null draws it as printed.
    *
@@ -30,9 +27,10 @@ interface MushafPageProps {
 /**
  * One page of the Madinah Mushaf, line for line as it is printed.
  *
- * The glyphs are addressed in this page's own font, so nothing here is readable text - and
- * until that font has arrived the page stays empty rather than showing the codes in a
- * substitute face, which would be gibberish rather than a rough preview.
+ * The glyphs are addressed in the font that draws this page, so nothing here is readable text -
+ * and until that font has arrived the page stays empty rather than showing the codes in a
+ * substitute face, which would be gibberish rather than a rough preview. A page that opens a
+ * surah waits on two fonts: its own, and the one the band is drawn from.
  *
  * Justification is the browser's: `text-align: justify` with `text-align-last: justify`
  * stretches the spaces inside a line until it fills the measure, which is what makes the line
@@ -45,35 +43,10 @@ const MushafPage: React.FC<MushafPageProps> = ({
   fontReady,
   selection,
   currentAyahNumber,
-  basmala,
-  surahOf,
   hiddenFrom = null,
   onPointerDown,
   onClick,
 }) => {
-  // Which blank line carries the basmala. A surah is introduced by the blank lines directly
-  // above its opening line - usually two, sometimes one, occasionally three - so the gap is
-  // read backwards from the line that starts the surah. The basmala takes the last of those
-  // blank lines; any further one above it stays empty. The surah name is not printed: the
-  // header already names the surahs a page holds.
-  const basmalas = new Set<number>();
-
-  lines.forEach((line, i) => {
-    if (line.type !== 'ayah') return;
-    const surah = surahOf(line.runs[0][0]);
-    if (!surah) return; // the line does not open a surah, it only continues one
-
-    let gap = 0;
-    while (i - gap - 1 >= 0 && lines[i - gap - 1].type === 'blank') gap++;
-    // Two surahs in the whole Mushaf get no blank line of their own. Borrowing a line from
-    // the text would push the page out of true, which is the thing to avoid here.
-    if (gap === 0) return;
-
-    // At-Tawba has no basmala, and Al-Fatiha's is its first verse.
-    if (surah.number === 1 || surah.number === 9) return;
-    basmalas.add(i - 1);
-  });
-
   const isSelected = (ayah: number) => !!selection && ayah >= selection.start && ayah <= selection.end;
 
   // A printed page is about 1.4 times as tall as its text block is wide, whatever it holds. So
@@ -123,12 +96,27 @@ const MushafPage: React.FC<MushafPageProps> = ({
         }`}
       >
         {lines.map((line, i) => {
-          if (basmalas.has(i)) {
+          // The band naming a surah and the basmala below it are single glyphs the print sets
+          // on lines of their own. Centred rather than justified: there is nothing to stretch
+          // between. Both ink centred in their own advance box, so centring the box is enough.
+          if (line.type === 'surah' || line.type === 'bismillah') {
             return (
-              <div key={i} style={{ height: `${lineHeight}cqw` }}
-                className="flex items-center justify-center">
-                <span className="font-arabic-display text-[3cqw] leading-none text-slate-700 dark:text-slate-200" dir="rtl">
-                  {basmala}
+              <div
+                key={i}
+                style={{ height: `${lineHeight}cqw` }}
+                className="flex items-center justify-center"
+              >
+                <span
+                  dir="rtl"
+                  lang="ar"
+                  style={{
+                    fontFamily: `"${lineFontFamily(line, page)}"`,
+                    fontSize: `${fontSize}cqw`,
+                    lineHeight: 1,
+                  }}
+                  className="text-slate-900 dark:text-slate-100"
+                >
+                  {line.type === 'bismillah' ? BASMALA_GLYPH : line.glyph}
                 </span>
               </div>
             );
@@ -146,6 +134,16 @@ const MushafPage: React.FC<MushafPageProps> = ({
                   fontFamily: `"${pageFontFamily(page)}"`,
                   textAlign: 'justify',
                   textAlignLast: 'justify',
+                  // The glyph codes sit in the Private Use Area, and Unicode gives that block
+                  // the *left-to-right* bidi class. So a line of them is one long LTR run even
+                  // inside dir="rtl": the browser sets the first word of the verse at the left
+                  // edge and the last at the right, mirroring every line on the page. Each word
+                  // still draws correctly, which is what makes it so easy to miss - read the
+                  // line backwards and it says the right thing. Overriding the bidi algorithm
+                  // is what puts the words back in printed order; it is safe here because a
+                  // verse line holds nothing but these codes and the spaces between them, so
+                  // there is no genuinely bidirectional text for the override to get wrong.
+                  unicodeBidi: 'bidi-override',
                   fontSize: `${fontSize}cqw`,
                   // The line box, not the glyph height. That makes each word's hit area as tall
                   // as the line, so a drag crossing the space between two lines keeps tracking

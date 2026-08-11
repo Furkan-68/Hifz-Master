@@ -899,13 +899,6 @@ const App: React.FC = () => {
     return proposeAdoption(isLearned, rangeOf);
   }, [review.untouched, view, totalLearned, learned, rangeOf]);
 
-  // The surah an ayah *opens*, for the bands on a Mushaf page. Null for a verse that merely
-  // continues one, which is what keeps a band from being drawn on every line.
-  const surahOpenedBy = useCallback((ayah: number) => {
-    const found = getAyahByNumber(ayah);
-    return found && found.ayah.numberInSurah === 1 ? found.surah : null;
-  }, []);
-
   const surahNameOf = useCallback(
     (ayah: number) => getAyahByNumber(ayah)?.surah.englishName ?? '',
     []
@@ -1049,8 +1042,6 @@ const App: React.FC = () => {
           mode={drill.mode}
           card={drillCard}
           title={unitLabel(drill.unit)}
-          basmala={BASMALA}
-          surahOf={surahOpenedBy}
           surahNameOf={surahNameOf}
           onGrade={handleGrade}
           onClose={() => setDrill(null)}
@@ -1512,8 +1503,6 @@ const App: React.FC = () => {
                     fontReady={pageFontReady}
                     selection={selection}
                     currentAyahNumber={currentAyahNumber}
-                    basmala={BASMALA}
-                    surahOf={surahOpenedBy}
                     {...rowProps}
                   />
                 </>
