@@ -99,6 +99,18 @@ export const getAyahByNumber = (number: number): { ayah: Ayah; surah: Surah } | 
   };
 };
 
+/**
+ * The inverse of `getAyahByNumber`: a verse named the way people name one - surah, then its
+ * number within that surah - resolved to the global number everything else here speaks in.
+ * Null when that surah does not reach that verse.
+ */
+export const getGlobalAyahNumber = (surahNumber: number, numberInSurah: number): number | null => {
+  const data = loaded();
+  const surah = data.surahs[surahNumber - 1];
+  if (!surah || numberInSurah < 1 || numberInSurah > surah.numberOfAyahs) return null;
+  return data.globalOffsets[surahNumber - 1] + numberInSurah;
+};
+
 // One file per edition, fetched the first time that edition is shown and kept afterwards.
 const translations = new Map<string, Promise<string[][]>>();
 

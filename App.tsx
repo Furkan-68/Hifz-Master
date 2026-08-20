@@ -6,6 +6,7 @@ import {
   getSurahs,
   getSurahDetail,
   getAyahByNumber,
+  getGlobalAyahNumber,
   fetchTranslation,
   getAyahAudioUrl,
   TOTAL_AYAHS,
@@ -25,6 +26,8 @@ import { useMushafLayout } from './hooks/useMushafLayout';
 import { useReview } from './hooks/useReview';
 import ReviewDashboard from './components/ReviewDashboard';
 import ReviewSession from './components/ReviewSession';
+import JumpTo, { JUMP_SHORTCUT_HINT } from './components/JumpTo';
+import { JumpTarget } from './services/jump';
 import type { Grade } from 'ts-fsrs';
 // AyahRange comes from types.ts and is the same shape, so it serves as the review range too.
 import { UnitRef, newCard, proposeAdoption, suggestNextPage } from './services/review';
@@ -48,7 +51,8 @@ import {
   Type,
   BookMarked,
   BookCheck,
-  Rows3
+  Rows3,
+  Compass
 } from 'lucide-react';
 
 type Theme = 'light' | 'dark';
@@ -275,6 +279,7 @@ const App: React.FC = () => {
   });
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showJump, setShowJump] = useState<boolean>(false);
   const [showPlayback, setShowPlayback] = useState<boolean>(false);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [showTranslation, setShowTranslation] = useState<boolean>(() => {
@@ -605,10 +610,21 @@ const App: React.FC = () => {
     lastReadingViewRef.current = view;
   }, [view]);
 
+  // A page asked for before the layout was there. It cannot be turned to until the layout
+  // lands, and the effect below would otherwise overrule it with the cursor's page.
+  const pinnedPageRef = useRef<number | null>(null);
+
   // Open on the page holding whatever is being practised, not on page 1. View state rather than
   // layout state, so it sits here and not in the hook: it fires once, when the layout lands.
   useEffect(() => {
-    if (!mushafReady || !currentAyahNumberRef.current) return;
+    if (!mushafReady) return;
+    const pinned = pinnedPageRef.current;
+    pinnedPageRef.current = null;
+    if (pinned !== null) {
+      setMushafPage(pinned);
+      return;
+    }
+    if (!currentAyahNumberRef.current) return;
     setMushafPage(getPageOfAyah(currentAyahNumberRef.current));
   }, [mushafReady]);
 
@@ -746,13 +762,25 @@ const App: React.FC = () => {
   // its own Escape - it is the only one that knows how much of the pass would be thrown away.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || showSettings || drill) return;
+      if (e.key !== 'Escape' || showSettings || showJump || drill) return;
       if (showPlayback) setShowPlayback(false);
       else clearSelection();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, showSettings, showPlayback, drill]);
+  }, [clearSelection, showSettings, showJump, showPlayback, drill]);
+
+  // One key to anywhere in the Mushaf, from wherever you are standing. Not during the drill:
+  // it has keys of its own, and a jump out of it would throw away a half-finished pass.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || drill) return;
+      e.preventDefault();
+      setShowJump(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [drill]);
 
   // Never leave a pause timer running behind us
   useEffect(() => () => {
@@ -781,6 +809,46 @@ const App: React.FC = () => {
     } catch (err) {
       console.error("Failed to load surah", err);
     }
+  };
+
+  /**
+   * Go where the palette was pointed.
+   *
+   * A verse and a surah are one and the same journey - a surah is entered at its first verse -
+   * so both come down to putting the cursor on a global number and bringing the open view
+   * along with it. A page is not: a page exists only in the Mushaf, so asking for one is also
+   * asking for that view.
+   */
+  const handleJump = (target: JumpTarget) => {
+    // Jumping from the review dashboard means the text, not the dashboard. Which reading view
+    // is a question of where you were last - the same answer its own button gives.
+    if (view === 'review') setView(lastReadingViewRef.current);
+
+    if (target.kind === 'page') {
+      setView('mushaf');
+      setMushafPage(target.page);
+      if (!mushafReady) pinnedPageRef.current = target.page;
+      return;
+    }
+
+    const numberInSurah = target.kind === 'ayah' ? target.numberInSurah : 1;
+    const number = getGlobalAyahNumber(target.surah.number, numberInSurah);
+    if (number === null) return;
+
+    if (target.surah.number !== currentSurah?.number) {
+      setSelectedSurahNumber(target.surah.number);
+      loadSurah(target.surah.number);
+    }
+    // A range that does not hold where we are going would pull the cursor straight back out
+    // of it - the effect that keeps those two together sees to that - so it goes. One that
+    // does hold it stays: moving about inside a block you are working on should not cost you
+    // the block.
+    if (!selection || number < selection.start || number > selection.end) setSelection(null);
+    handleActivateAyah(number);
+    if (mushafReady) setMushafPage(getPageOfAyah(number));
+    // Whichever reading view is open still has to come along - scroll the verse into sight,
+    // or turn to its page. That is what this flag already asks for.
+    playbackDrivenRef.current = true;
   };
 
   const togglePlay = () => {
@@ -1048,6 +1116,13 @@ const App: React.FC = () => {
         />
       )}
 
+      <JumpTo
+        open={showJump}
+        surahs={surahs}
+        onJump={handleJump}
+        onClose={() => setShowJump(false)}
+      />
+
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -1230,6 +1305,20 @@ const App: React.FC = () => {
               <ChevronLeft className="w-5 h-5" />
             </button>
           </div>
+
+          {/* The field above narrows this list; this leaves it. Two different questions, so
+              two controls: a jump has to be able to reach a verse or a printed page, and the
+              list holds neither. */}
+          <button
+            onClick={() => setShowJump(true)}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-xl text-sm text-slate-500 dark:text-slate-400 border border-dashed border-slate-300 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+          >
+            <Compass className="w-4 h-4 shrink-0" />
+            <span className="flex-1 text-left truncate">Go to verse or page</span>
+            <kbd className="shrink-0 font-sans text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800">
+              {JUMP_SHORTCUT_HINT}
+            </kbd>
+          </button>
 
           {/* The exact count lives in the tooltip rather than a line of its own. */}
           {totalLearned > 0 && (
