@@ -212,7 +212,8 @@ for (const reciter of reciters) {
   }
 
   await writeManifest(reciter, bytes);
-  console.log(`  ${fetched} fetched, ${skipped} already here, ${mb(bytes)} in public/audio/${reciter}/`);
+  // The directory as it actually is, not as it is by default - HIFZ_AUDIO_DIR may have moved it.
+  console.log(`  ${fetched} fetched, ${skipped} already here, ${mb(bytes)} in ${join(AUDIO_DIR, reciter)}`);
   console.log(`  manifest.json now lists ${reciter} - the app will play it off disk.`);
 }
 
