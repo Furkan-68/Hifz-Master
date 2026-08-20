@@ -10,7 +10,8 @@ that block on a loop — with per-verse repeats, a pause sized to what you just 
 adjustable playback speed, and a record of what you already know.
 
 Runs entirely in the browser. No account, no backend, no API key. The text and the fonts ship
-with the app — only the recitation comes off the network.
+with the app, and the recitation can be fetched onto disk too — after that nothing at all comes
+off the network.
 
 ---
 
@@ -144,6 +145,7 @@ set in `vite.config.ts`.
 | `npm run fetch:quran` | Re-download the text into `public/data/` (rarely needed — see below) |
 | `npm run fetch:mushaf` | Re-download the Mushaf page layout (605 requests, about a minute) |
 | `npm run fetch:fonts` | Re-download the fonts into `public/fonts/` (113 requests, ~38 MB) |
+| `npm run fetch:audio` | Download a whole recitation into `public/audio/` (6236 requests, ~1.6 GB, resumable) |
 | `npm run check:review` | Check the review scheduler — the gate, the day boundary, the stored form |
 | `npx tsc --noEmit` | Type check (not part of the build — Vite transpiles without checking) |
 
@@ -221,22 +223,32 @@ The files are generated, not written by hand:
 npm run fetch:quran   # the text
 npm run fetch:mushaf  # the Mushaf page layout
 npm run fetch:fonts   # both sets of fonts
+npm run fetch:audio   # a whole recitation, if you want one on disk
 ```
 
 `fetch:quran` downloads everything from [alquran.cloud](https://alquran.cloud/api) in six
 requests, normalizes it, checks it, and writes `public/data/`. `fetch:fonts` mirrors the 48
-QCF V4 faces and the five interface faces into `public/fonts/`. All three are deliberately
-**not** part of the build — a build must not depend on the network. See `public/data/README.md`
-and `public/fonts/README.md` for the sources and their terms.
+QCF V4 faces and the five interface faces into `public/fonts/`. All four are deliberately
+**not** part of the build — a build must not depend on the network. See `public/data/README.md`,
+`public/fonts/README.md` and `public/audio/README.md` for the sources and their terms.
 
 Sizes: 1.3 MB of Arabic (265 KB gzipped, loaded once at startup), 756 KB–1.1 MB per translation
 fetched the first time you pick that edition, 2.3 MB of interface fonts of which a browser
 downloads only the subsets it needs, and 36 MB of Mushaf faces of which a sitting touches a few.
 
-**Audio is the exception** and still comes from `cdn.islamic.network` — one MP3 per verse,
-addressed by the *global* ayah number (1–6236), not the number within the surah. A full
-recitation runs to about 1.5 GB per reciter, which is not something to ship. Playback therefore
-still needs a connection; the text does not.
+**Audio is the exception, unless you fetch it.** It comes from `cdn.islamic.network` — one MP3
+per verse, addressed by the *global* ayah number (1–6236), not the number within the surah. A
+full recitation runs to about 1.6 GB per reciter, which is far too much to put in the repository,
+so a fresh checkout streams it and needs a connection to play anything.
+
+`npm run fetch:audio` changes that for the machine it runs on: it pulls all 6236 files of a
+reciter into `public/audio/<reciter>/` and records it in `public/audio/manifest.json`.
+`getAyahAudioUrl` reads that manifest once at startup and builds local URLs for every reciter
+listed there, CDN URLs for the rest — so a machine that has fetched Alafasy plays it off disk and
+still streams the other three. The directory is gitignored; the download is resumable; and a
+reciter is only written into the manifest once **all** 6236 of its files are there, because a
+half-fetched recitation would fail somewhere in the middle of a loop. See
+`public/audio/README.md`.
 
 ### Stored keys
 
@@ -278,5 +290,7 @@ was still shared across reciters.
   clears it.
 - **No way to reset all progress at once.** A surah marked by accident can be unmarked with the
   same button, but there is no global reset.
-- **Playback still needs a connection.** The text is local, the recitation is not — about 1.5 GB
-  per reciter is too much to ship. Read and mark verses offline; hearing them needs the network.
+- **Playback needs a connection until you fetch the recitation.** The text is local out of the
+  box; the audio is not, because about 1.6 GB per reciter is too much to put in the repository.
+  Read and mark verses offline right away — hearing them needs either the network or one run of
+  `npm run fetch:audio`, and there is no way to fetch a single surah rather than all 6236 verses.

@@ -10,6 +10,7 @@
     "fetch:quran": "node scripts/fetch-quran.mjs",
     "fetch:mushaf": "node scripts/fetch-mushaf.mjs",
     "fetch:fonts": "node scripts/fetch-fonts.mjs",
+    "fetch:audio": "node scripts/fetch-audio.mjs",
     "check:review": "node scripts/check-review.mjs"
   },
   "dependencies": {

@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 
 todo.md
+
+# The recitation - about 1.6 GB per reciter, fetched by `npm run fetch:audio`. The one
+# bundled asset that stays out of the repo; manifest.json with it, since it describes what
+# this machine has on disk. See public/audio/README.md.
+public/audio/*
+!public/audio/README.md

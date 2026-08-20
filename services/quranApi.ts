@@ -5,12 +5,17 @@ import { Surah, SurahDetail, Ayah } from '../types';
 // Everything the API used to need cleaning up - the basmala glued to ayah 1, the BOM in front
 // of Al-Fatiha - is already handled there, so nothing is normalized at runtime.
 const DATA_URL = `${import.meta.env.BASE_URL}data`;
+// Where `npm run fetch:audio` puts a recitation it has brought in. Empty until it is run.
+const AUDIO_URL = `${import.meta.env.BASE_URL}audio`;
 
 let surahs: Surah[] | null = null;
 let verses: string[][] | null = null;
 // Global ayah number of the verse *before* each surah. The audio files are addressed by that
 // number (1-6236), so it is the one thing here that must not drift.
 let globalOffsets: number[] | null = null;
+// Edition ids whose 6236 files are on disk. A recitation is all there or it is not there:
+// half a reciter would fail mid-block, which is worse than playing the whole of it off the CDN.
+let localReciters = new Set<string>();
 
 let loading: Promise<void> | null = null;
 
@@ -18,6 +23,28 @@ const getJson = async <T>(file: string): Promise<T> => {
   const response = await fetch(`${DATA_URL}/${file}`);
   if (!response.ok) throw new Error(`Failed to load ${file}: HTTP ${response.status}`);
   return (await response.json()) as T;
+};
+
+type AudioManifest = { reciters?: Record<string, { files?: number } | undefined> };
+
+/**
+ * Which recitations are on disk, from public/audio/manifest.json. No manifest is the normal
+ * state of a checkout nobody has run `npm run fetch:audio` in, so this answers "none" rather
+ * than failing the load - and only a reciter with all 6236 files counts.
+ */
+const loadAudioManifest = async (): Promise<Set<string>> => {
+  try {
+    const response = await fetch(`${AUDIO_URL}/manifest.json`);
+    if (!response.ok) return new Set();
+    const manifest = (await response.json()) as AudioManifest;
+    return new Set(
+      Object.entries(manifest.reciters ?? {})
+        .filter(([, entry]) => entry?.files === TOTAL_AYAHS)
+        .map(([id]) => id)
+    );
+  } catch {
+    return new Set();
+  }
 };
 
 /**
@@ -29,8 +56,9 @@ export const loadQuranData = (): Promise<void> => {
     loading = Promise.all([
       getJson<Surah[]>('surahs.json'),
       getJson<string[][]>('quran.json'),
+      loadAudioManifest(),
     ])
-      .then(([surahList, text]) => {
+      .then(([surahList, text, bundledReciters]) => {
         let running = 0;
         globalOffsets = surahList.map((surah) => {
           const offset = running;
@@ -39,6 +67,9 @@ export const loadQuranData = (): Promise<void> => {
         });
         surahs = surahList;
         verses = text;
+        // Settled before the first verse is on screen, so getAyahAudioUrl - which is called
+        // during render and has to answer at once - never has to wait on it.
+        localReciters = bundledReciters;
       })
       .catch((err) => {
         loading = null;
@@ -129,6 +160,9 @@ export const fetchTranslation = async (surahNumber: number, edition: string): Pr
 };
 
 export const getAyahAudioUrl = (number: number, reciter: string = 'ar.alafasy') => {
-  // The only thing still coming off the network: a full recitation is ~1.5 GB per reciter.
+  // Off disk once `npm run fetch:audio` has brought that recitation in - which is what makes
+  // the app work with no connection at all. Everything else it needs already ships with it.
+  if (localReciters.has(reciter)) return `${AUDIO_URL}/${reciter}/${number}.mp3`;
+  // Otherwise off the CDN: at ~1.6 GB per reciter, the one thing not worth putting in the repo.
   return `https://cdn.islamic.network/quran/audio/128/${reciter}/${number}.mp3`;
 };
