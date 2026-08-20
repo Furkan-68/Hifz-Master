@@ -6,6 +6,8 @@
  *   npm run fetch:audio -- ar.husary     # any other edition id from RECITERS in App.tsx
  *   npm run fetch:audio -- --force       # re-download files that are already here
  *
+ * HIFZ_AUDIO_DIR=/var/lib/hifz-audio npm run fetch:audio   # write outside the repository
+ *
  * Run by hand, never as part of the build - a build must not depend on the network. This is
  * one MP3 per verse, 6236 of them, about 1.6 GB per reciter, and it takes a quarter of an hour.
  *
@@ -17,7 +19,7 @@
  * reciter whose 6236 files are all present - see getAyahAudioUrl in services/quranApi.ts.
  */
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The same address services/quranApi.ts falls back to, and the same 128 kbps: the bitrate is
@@ -32,7 +34,15 @@ const MIN_BYTES = 8 * 1024; // the shortest verse is ~25 KB; anything under this
 const DEFAULT_RECITER = 'ar.alafasy';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const AUDIO_DIR = join(ROOT, 'public', 'audio');
+
+// public/audio by default, which is where the dev server and a build serve it from. A server
+// deployment points HIFZ_AUDIO_DIR somewhere outside the repository instead and maps /audio/
+// onto it in its own config - otherwise `npm run build` copies all 1.6 GB into dist/ and the
+// recitation sits on the disk twice. Wherever it goes, the layout is the same, so the app
+// cannot tell the difference.
+const AUDIO_DIR = process.env.HIFZ_AUDIO_DIR
+  ? resolve(process.env.HIFZ_AUDIO_DIR)
+  : join(ROOT, 'public', 'audio');
 const MANIFEST = join(AUDIO_DIR, 'manifest.json');
 
 const args = process.argv.slice(2);

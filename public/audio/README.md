@@ -41,11 +41,31 @@ it has been checked, so anything sitting here under its final name is whole, and
 skips it. Interrupt it and run it again — and if any verse fails for good, that reciter stays out
 of the manifest and the app keeps using the CDN until the gaps are filled.
 
-## A build carries it
+## A build carries it — unless you put it elsewhere
 
 `public/` is copied into `dist/` verbatim, so once the audio is here `npm run build` produces a
-`dist/` of about 1.6 GB and takes correspondingly longer. That is the point — that `dist/` needs
-no connection at all — but if you want a small build, move this directory aside first.
+`dist/` of about 1.6 GB and takes correspondingly longer. On a machine you read on, that is the
+point: that `dist/` needs no connection at all.
+
+On a server it is waste, because the recitation then sits on the disk twice — once in the
+checkout, once in what is served — and every deploy copies 1.6 GB. Point the script somewhere
+outside the repository instead and let the web server map `/audio/` onto it:
+
+```bash
+HIFZ_AUDIO_DIR=/var/lib/hifz-audio npm run fetch:audio
+```
+
+```nginx
+location /audio/ {
+    alias /var/lib/hifz-audio/;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+}
+```
+
+The layout under the directory is the same either way, so the app cannot tell the difference —
+it asks for `/audio/manifest.json` and `/audio/<reciter>/<n>.mp3` and does not care who answers.
+Immutable is honest here: a verse is addressed by its global number, and that never comes back
+meaning a different verse.
 
 ## Sources and terms
 
