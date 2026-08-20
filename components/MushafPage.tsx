@@ -48,6 +48,19 @@ const MushafPage: React.FC<MushafPageProps> = ({
   onClick,
 }) => {
   const isSelected = (ayah: number) => !!selection && ayah >= selection.start && ayah <= selection.end;
+  const isHidden = (ayah: number) => hiddenFrom !== null && ayah >= hiddenFrom;
+  const isMarked = (ayah: number) => ayah === currentAyahNumber || isSelected(ayah);
+
+  // A verse is marked by its own ink rather than by a band behind it, and ink only reads as
+  // marked against verses set back from it - so the rest of the page has to give way. Two
+  // things must not trigger that: a page with nothing marked on it, which would otherwise look
+  // faded for no reason as soon as you turned to it, and the drill, where the mark sits on the
+  // covered ayah and so has no ink to carry it. Hence the mark is looked for among the
+  // *visible* runs only; where it lands on a covered one the page keeps its printed weight and
+  // the band below does the marking instead.
+  const pageMarked = lines.some(
+    (line) => line.type === 'ayah' && line.runs.some(([ayah]) => isMarked(ayah) && !isHidden(ayah))
+  );
 
   // A printed page is about 1.4 times as tall as its text block is wide, whatever it holds. So
   // the line height follows from how many lines there are - which is also why the eight-line
@@ -153,7 +166,7 @@ const MushafPage: React.FC<MushafPageProps> = ({
                 className="w-full text-slate-900 dark:text-slate-100"
               >
                 {line.runs.map(([ayah, glyphs], r) => {
-                  const hidden = hiddenFrom !== null && ayah >= hiddenFrom;
+                  const hidden = isHidden(ayah);
                   return (
                     <span
                       key={r}
@@ -163,24 +176,35 @@ const MushafPage: React.FC<MushafPageProps> = ({
                       // Vertical padding on an inline box overflows instead of pushing the lines
                       // apart, so this costs nothing in layout and closes the dead ground between
                       // two lines - where a drag would otherwise lose the verse it was tracking.
-                      // It is also why the highlight has to stay translucent: an opaque band
-                      // would visibly bleed into the lines above and below.
+                      // It is also why the one band left below has to stay translucent: an
+                      // opaque one would visibly bleed into the lines above and below.
                       style={{ paddingBlock: '0.25em' }}
                       // Covered up by going transparent, never by being removed or replaced.
                       // The type on this page is sized by measuring its widest line
                       // (see below), so anything that changed a line's width would send that
                       // measurement chasing a new answer on every reveal - and the printed line
                       // breaks, the whole point of this view, would move. Transparent text
-                      // changes no box at all, keeps the highlight behind the ayah that is owed,
-                      // and fades in for free through the transition already here.
+                      // changes no box at all, and fades in for free through the transition
+                      // already here.
+                      //
+                      // Marking is done in ink rather than in colour behind the words: the verse
+                      // being recited is set full black on light paper and full white on dark,
+                      // the rest of the range a step back from it, and everything else on the
+                      // page a good way further back still. The covered ayah is the exception,
+                      // having no ink to carry a mark - there the band stays, to say where what
+                      // is owed sits.
                       className={`cursor-pointer rounded transition-colors ${
-                        hidden ? 'text-transparent' : ''
-                      } ${
-                        ayah === currentAyahNumber
-                          ? 'bg-indigo-200/70 dark:bg-indigo-500/40'
-                          : hidden || !isSelected(ayah)
-                            ? ''
-                            : 'bg-indigo-100/70 dark:bg-indigo-900/50'
+                        hidden
+                          ? `text-transparent ${
+                              ayah === currentAyahNumber ? 'bg-indigo-200/70 dark:bg-indigo-500/40' : ''
+                            }`
+                          : ayah === currentAyahNumber
+                            ? 'text-black dark:text-white'
+                            : isSelected(ayah)
+                              ? 'text-slate-700 dark:text-slate-300'
+                              : pageMarked
+                                ? 'text-slate-400 dark:text-slate-500'
+                                : ''
                       }`}
                     >
                       {glyphs}
